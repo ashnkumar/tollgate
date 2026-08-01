@@ -176,6 +176,11 @@ honest one.
 - **One provider identity in the demo.** The contract supports any number — anyone can
   call `registerService` — but the seed script registers all three services to one
   address for legibility.
+- **A settlement that never lands costs the provider.** By the time settlement runs, the
+  model call has happened and the provider has been billed for it. Transient failures are
+  retried, but if the transaction ultimately does not land the call stays open until the
+  buyer reclaims and the provider is out of pocket. A production deployment would persist
+  unsettled calls and retry them out of band rather than only within the request.
 - **The contract has not been audited.** It is a reference implementation. The tests are
   thorough about the paths they cover; that is not the same thing.
 - **`CALL_TIMEOUT` is a fixed hour.** Long enough for any call here, but it is a constant

@@ -24,6 +24,8 @@ export interface AppDeps {
   chain: Chain;
   /** Address of the deployed Tollgate, bound into the message a buyer signs. */
   contractAddress: string;
+  /** Quote-store bounds. Overridable so tests can exercise them cheaply. */
+  limits?: { maxPendingQuotes?: number; quoteTtlMs?: number };
 }
 
 /**
@@ -73,7 +75,9 @@ class HttpError extends Error {
   }
 }
 
-export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
+export function createApp({ ai, chain, contractAddress, limits }: AppDeps): Express {
+  const maxPendingQuotes = limits?.maxPendingQuotes ?? MAX_PENDING_QUOTES;
+  const quoteTtlMs = limits?.quoteTtlMs ?? QUOTE_TTL_MS;
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
@@ -92,7 +96,7 @@ export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
 
   /** Drop quotes nobody funded. Cheap, and runs on the path that creates them. */
   const pruneExpiredQuotes = () => {
-    const cutoff = Date.now() - QUOTE_TTL_MS;
+    const cutoff = Date.now() - quoteTtlMs;
     for (const [id, quote] of pending) {
       if (quote.issuedAt < cutoff) pending.delete(id);
     }
@@ -160,7 +164,7 @@ export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
     const quoteWei = await chain.quote(serviceId(slug), inputTokens);
 
     pruneExpiredQuotes();
-    if (pending.size >= MAX_PENDING_QUOTES) {
+    if (pending.size >= maxPendingQuotes) {
       throw new HttpError(503, "Too many unredeemed quotes outstanding; retry shortly");
     }
 

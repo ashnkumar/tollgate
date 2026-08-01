@@ -153,11 +153,46 @@ export class TollgateChain implements Chain {
     };
   }
 
+  /**
+   * Settlement is the one step where a transient failure costs real money.
+   *
+   * By the time this runs the model call has already happened and the provider has
+   * already been billed for it. If the transaction does not land, the call stays open
+   * until the buyer reclaims and the provider is simply out of pocket. A blip on the
+   * RPC endpoint should not be enough to cause that, so transient failures are retried.
+   *
+   * A revert is not transient and will fail the same way each time; retrying it costs
+   * three quick round trips and then surfaces the real error.
+   */
   async settleCall(callId: string, inputTokens: number, outputTokens: number): Promise<TransactionReceipt> {
-    const tx = await this.contract.settleCall(callId, inputTokens, outputTokens);
-    const receipt = await tx.wait();
-    if (!receipt) throw new Error(`settleCall ${callId} produced no receipt`);
-    return receipt;
+    return this.withRetry(`settleCall ${callId}`, async () => {
+      const tx = await this.contract.settleCall(callId, inputTokens, outputTokens);
+      return tx.wait();
+    });
+  }
+
+  private async withRetry(
+    label: string,
+    send: () => Promise<TransactionReceipt | null>,
+    attempts = 3,
+  ): Promise<TransactionReceipt> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const receipt = await send();
+        if (!receipt) throw new Error(`${label} produced no receipt`);
+        return receipt;
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) {
+          console.warn(`${label} failed (attempt ${attempt}/${attempts}), retrying:`, error);
+          await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+        }
+      }
+    }
+    // Loud on the way out: at this point the model call has been paid for and not billed.
+    console.error(`${label} did not land after ${attempts} attempts; the call is unsettled`, lastError);
+    throw lastError;
   }
 
   async failCall(callId: string, reason: string): Promise<TransactionReceipt> {

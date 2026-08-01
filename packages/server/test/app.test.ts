@@ -281,13 +281,23 @@ describe("payment guards", () => {
     });
 
     it("refuses to mint unbounded quotes", async () => {
-      // Far more than the cap, minted without ever funding any of them.
-      let rejected = 0;
-      for (let i = 0; i < 1200; i += 1) {
-        const res = await request(app).post("/quote").send({ service: "summarize", input: `x${i}` });
-        if (res.status === 503) rejected += 1;
+      // Same behaviour as the production ceiling, exercised at a size that keeps the
+      // test fast rather than minting a thousand quotes through a deferred fake chain.
+      const capped = createApp({
+        ai: new FakeAiClient(),
+        chain,
+        contractAddress: chain.contractAddress,
+        limits: { maxPendingQuotes: 3 },
+      });
+
+      const statuses: number[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const res = await request(capped).post("/quote").send({ service: "summarize", input: `x${i}` });
+        statuses.push(res.status);
       }
-      expect(rejected).toBeGreaterThan(0);
+
+      expect(statuses.filter((s) => s === 200)).toHaveLength(3);
+      expect(statuses.filter((s) => s === 503)).toHaveLength(2);
     });
   });
 
