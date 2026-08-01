@@ -1,6 +1,6 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { randomBytes } from "node:crypto";
-import { hexlify } from "ethers";
+import { getAddress, hexlify, verifyMessage } from "ethers";
 import { SERVICES, findService, serviceId, type ServiceDefinition } from "./catalogue.js";
 import type { AiClient } from "./ai.js";
 import { ModelRefusedError } from "./ai.js";
@@ -22,7 +22,37 @@ interface PendingQuote {
 export interface AppDeps {
   ai: AiClient;
   chain: Chain;
+  /** Address of the deployed Tollgate, bound into the message a buyer signs. */
+  contractAddress: string;
 }
+
+/**
+ * The message a buyer signs to redeem a call.
+ *
+ * A call id alone must not authorise anything. It is minted by the server and handed
+ * back over HTTP, so it can end up in a proxy log, a browser history, or a shared
+ * client — and whoever held it could otherwise collect output somebody else paid for.
+ * Signing proves possession of the key that funded the call, which the buyer already
+ * has. It stays account-free: there is nothing to sign up for, only a key to prove.
+ *
+ * The contract address is included so a signature cannot be replayed against a
+ * different deployment.
+ */
+export function redemptionMessage(callId: string, contractAddress: string): string {
+  return [
+    "Tollgate: redeem call",
+    `call: ${callId}`,
+    `contract: ${getAddress(contractAddress)}`,
+  ].join("\n");
+}
+
+/**
+ * Refuse to start work that cannot be settled. `reclaimCall` becomes available at
+ * `expiresAt`, and a buyer who reclaims while the model is mid-flight would leave the
+ * provider having done the work for nothing — `settleCall` reverts once the call is
+ * marked settled. Requiring headroom removes the race rather than losing it politely.
+ */
+const SETTLEMENT_HEADROOM_SECONDS = 300n;
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -30,7 +60,7 @@ class HttpError extends Error {
   }
 }
 
-export function createApp({ ai, chain }: AppDeps): Express {
+export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
@@ -132,8 +162,10 @@ export function createApp({ ai, chain }: AppDeps): Express {
    * should cost nothing.
    */
   app.post("/run", async (req: Request, res: Response) => {
-    const { callId } = req.body ?? {};
-    if (typeof callId !== "string") throw new HttpError(400, "Body must be { callId: string }");
+    const { callId, signature } = req.body ?? {};
+    if (typeof callId !== "string" || typeof signature !== "string") {
+      throw new HttpError(400, "Body must be { callId: string, signature: string }");
+    }
 
     const quote = pending.get(callId);
     if (!quote) throw new HttpError(404, "Unknown or already-used callId");
@@ -146,6 +178,25 @@ export function createApp({ ai, chain }: AppDeps): Express {
     }
     if (onChainCall.escrowWei < quote.quoteWei) {
       throw new HttpError(402, `Escrow ${onChainCall.escrowWei} is below quote ${quote.quoteWei}`);
+    }
+
+    // Only the account that funded the call may redeem its output.
+    let signer: string;
+    try {
+      signer = verifyMessage(redemptionMessage(callId, contractAddress), signature);
+    } catch {
+      throw new HttpError(401, "Malformed signature");
+    }
+    if (getAddress(signer) !== getAddress(onChainCall.buyer)) {
+      throw new HttpError(403, "Signature is not from the account that funded this call");
+    }
+
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    if (onChainCall.expiresAt <= now + SETTLEMENT_HEADROOM_SECONDS) {
+      throw new HttpError(
+        409,
+        "Too close to expiry to run safely — reclaim the escrow and take a fresh quote",
+      );
     }
 
     // Consume the quote now: a callId is single-use whatever happens next.

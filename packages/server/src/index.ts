@@ -18,7 +18,7 @@ if (config.useFakeModel) {
 }
 
 const chain = new TollgateChain(config.rpcUrl, config.tollgateAddress, config.settlerPrivateKey);
-const app = createApp({ ai, chain });
+const app = createApp({ ai, chain, contractAddress: config.tollgateAddress });
 
 app.listen(config.port, () => {
   console.log(`tollgate  http://localhost:${config.port}`);

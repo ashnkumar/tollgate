@@ -1,3 +1,4 @@
+import { Wallet } from "ethers";
 import type { Chain, OnChainCall, OnChainService } from "../../src/chain.js";
 import { serviceId } from "../../src/catalogue.js";
 
@@ -10,6 +11,9 @@ const ZERO = "0x0000000000000000000000000000000000000000";
  */
 export class FakeChain implements Chain {
   readonly settlerAddress = "0x000000000000000000000000000000000000dEaD";
+  /** A real key, so tests can produce a valid redemption signature. */
+  readonly buyerWallet = new Wallet("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
+  readonly contractAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
   readonly services = new Map<string, OnChainService>();
   readonly calls = new Map<string, OnChainCall>();
   readonly balances = new Map<string, bigint>();
@@ -38,7 +42,7 @@ export class FakeChain implements Chain {
     const amount = escrow ?? (await this.quote(sid, inputTokens));
     this.calls.set(callId, {
       serviceId: sid,
-      buyer: "0x00000000000000000000000000000000000000B0",
+      buyer: this.buyerWallet.address,
       escrowWei: amount,
       quotedInputTokens: inputTokens,
       expiresAt: BigInt(Math.floor(Date.now() / 1000) + 3600),

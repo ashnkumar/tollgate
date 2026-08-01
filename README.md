@@ -109,6 +109,11 @@ The contract holds the rate card, so `quote()` is a public view function: a buye
 recompute the price themselves and never has to trust the server's number. The demo
 checks this on every run (the `chain agrees` line above).
 
+A funded call carries its own frozen copy of the terms it was quoted under, so a
+provider changing prices, the output ceiling, or the settler cannot disturb a call that
+is already in flight. Redeeming a call's output requires a signature from the account
+that funded it — the call id travels over HTTP and is not, on its own, authorisation.
+
 At settlement the server reports **token counts, never a price**. Cost is recomputed
 on-chain from the published rate card, and settlement reverts if it would exceed the
 escrow. So the quote is a hard ceiling enforced by the contract, not a promise.
@@ -142,7 +147,7 @@ Nothing here is specific to a particular chain. It is plain EVM; point `RPC_URL`
 ## Tests
 
 ```bash
-pnpm test                   # 34 contract tests + 18 server tests, all offline
+pnpm test                   # 39 contract tests + 24 server tests, all offline
 ./scripts/smoke.sh          # the whole stack against a real chain
 RUN_LIVE_TESTS=1 pnpm test  # adds 4 tests against the real Anthropic API
 ```

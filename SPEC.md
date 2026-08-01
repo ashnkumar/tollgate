@@ -49,8 +49,10 @@ charges what was actually used and returns the rest.
     |                                                       |
     |-- openCall{value: quoteWei} ------------------------->| escrow held
     |                                                       |
-    |-- POST /run ------------>|                            |
+    |-- POST /run + signature ->|                           |
     |                          |-- read call, check escrow ->|
+    |                          |   and that the signer is    |
+    |                          |   the account that funded   |
     |                          |-- messages.create --------->| (Anthropic)
     |                          |-- settleCall(in, out) ----->| charge actual,
     |<-- output, settlement ---|                            |  refund difference
@@ -155,6 +157,29 @@ does not help with; the chain is a local process. Docker would mainly pin a Node
 at the cost of requiring a running Docker daemon. `pnpm install` plus a four-line
 quickstart is tested from clean; an untested compose file would have been worse than none.
 
+**A call carries its own copy of the terms it was funded under.** Settlement originally
+read the provider's live service record, which looked equivalent and was not: a provider
+could edit a service mid-flight and make a funded call impossible to settle — raising
+rates pushed cost past the escrow, lowering the ceiling made the real output
+unreportable, changing the settler locked out the machine that did the work. The buyer
+was never overcharged, but their money sat until timeout and the provider earned nothing,
+and an honest price change would brick every call in flight. `openCall` now freezes the
+provider, settler, rates and ceiling into the call. Three extra storage slots; funded
+calls become immune to anything the provider does afterwards.
+
+**Redeeming output requires a signature, not just the call id.** The call id is minted by
+the server and returned over HTTP, so it can land in a proxy log or a shared client. If
+possession alone authorised `/run`, whoever held it could collect output someone else
+paid for. The buyer signs a message binding the call id and the contract address, and the
+server checks the recovered address against the on-chain buyer. This keeps the
+account-free property — there is nothing to sign up for, only a key to prove, and the
+buyer already holds that key because they funded the call.
+
+**`/run` refuses to start too close to expiry.** `reclaimCall` opens at `expiresAt`. A
+call started a minute before that could have its escrow reclaimed while the model is
+still running, leaving the provider having paid for work it can no longer settle. Five
+minutes of required headroom removes the race instead of losing it politely.
+
 **In-memory quote store.** `/run` must land on the process that issued the `/quote`, so
 this does not survive horizontal scaling. It is called out in the code rather than
 papered over — the alternative is a Redis dependency that adds a service to the quickstart
@@ -175,8 +200,8 @@ scripts/smoke.sh     full stack against a real chain; what CI runs
 
 | Suite | Covers | Needs |
 |---|---|---|
-| `packages/contracts` (34) | escrow, settlement arithmetic, fee split, refunds, expiry, withdrawal, access control | nothing |
-| `packages/server` (18) | quoting, escrow verification, single-use call ids, failure refunds, input clamping | nothing |
+| `packages/contracts` (39) | escrow, settlement arithmetic, frozen terms, fee split, refunds, expiry, withdrawal, access control | nothing |
+| `packages/server` (24) | quoting, escrow verification, redemption signatures, expiry headroom, single-use call ids, failure refunds, input clamping | nothing |
 | `live-anthropic.test.ts` (4) | count-before matches count-after; `max_tokens` is enforced | `RUN_LIVE_TESTS=1` + key |
 | `scripts/smoke.sh` | the whole stack against a real chain | nothing |
 

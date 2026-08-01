@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
+import { Wallet } from "ethers";
 import type { Express } from "express";
-import { createApp } from "../src/app.js";
+import { createApp, redemptionMessage } from "../src/app.js";
 import { FakeAiClient, ModelRefusedError, type AiClient } from "../src/ai.js";
 import { serviceId, type ServiceDefinition } from "../src/catalogue.js";
 import { FakeChain } from "./support/fake-chain.js";
@@ -13,8 +14,15 @@ describe("payment guards", () => {
   beforeEach(() => {
     chain = new FakeChain();
     chain.addService("summarize");
-    app = createApp({ ai: new FakeAiClient(), chain });
+    app = createApp({ ai: new FakeAiClient(), chain, contractAddress: chain.contractAddress });
   });
+
+  /** Sign as the account FakeChain records as the buyer. */
+  const sign = (callId: string) =>
+    chain.buyerWallet.signMessage(redemptionMessage(callId, chain.contractAddress));
+
+  const runCall = async (target: Express, callId: string) =>
+    request(target).post("/run").send({ callId, signature: await sign(callId) });
 
   const quoteFor = async (input = "hello world") => {
     const res = await request(app).post("/quote").send({ service: "summarize", input });
@@ -71,7 +79,7 @@ describe("payment guards", () => {
   describe("running a call", () => {
     it("refuses to run before the buyer has funded it", async () => {
       const q = await quoteFor();
-      const res = await request(app).post("/run").send({ callId: q.callId });
+      const res = await runCall(app, q.callId);
       expect(res.status).toBe(402);
       expect(chain.settleCalls).toHaveLength(0);
     });
@@ -81,7 +89,7 @@ describe("payment guards", () => {
     it("refuses to run when the escrow is below the quote", async () => {
       const q = await quoteFor();
       await chain.fundCall(q.callId, "summarize", q.inputTokens, BigInt(q.quoteWei) - 1n);
-      const res = await request(app).post("/run").send({ callId: q.callId });
+      const res = await runCall(app, q.callId);
       expect(res.status).toBe(402);
       expect(chain.settleCalls).toHaveLength(0);
     });
@@ -90,7 +98,7 @@ describe("payment guards", () => {
       chain.addService("translate");
       const q = await quoteFor();
       await chain.fundCall(q.callId, "translate", q.inputTokens, BigInt(q.quoteWei) * 2n);
-      const res = await request(app).post("/run").send({ callId: q.callId });
+      const res = await runCall(app, q.callId);
       expect(res.status).toBe(409);
     });
 
@@ -98,7 +106,7 @@ describe("payment guards", () => {
       const q = await quoteFor();
       await chain.fundCall(q.callId, "summarize", q.inputTokens);
 
-      const res = await request(app).post("/run").send({ callId: q.callId });
+      const res = await runCall(app, q.callId);
       expect(res.status).toBe(200);
       expect(res.body.output).toContain("[fake summarize]");
       expect(chain.settleCalls).toHaveLength(1);
@@ -113,7 +121,7 @@ describe("payment guards", () => {
     it("bills the output actually produced, not the ceiling", async () => {
       const q = await quoteFor();
       await chain.fundCall(q.callId, "summarize", q.inputTokens);
-      const res = await request(app).post("/run").send({ callId: q.callId });
+      const res = await runCall(app, q.callId);
       expect(res.body.usage.outputTokens).toBeLessThan(res.body.usage.maxOutputTokens);
       expect(chain.settleCalls[0]!.outputTokens).toBe(res.body.usage.outputTokens);
     });
@@ -121,14 +129,92 @@ describe("payment guards", () => {
     it("treats a call id as single-use", async () => {
       const q = await quoteFor();
       await chain.fundCall(q.callId, "summarize", q.inputTokens);
-      expect((await request(app).post("/run").send({ callId: q.callId })).status).toBe(200);
-      expect((await request(app).post("/run").send({ callId: q.callId })).status).toBe(404);
+      expect((await runCall(app, q.callId)).status).toBe(200);
+      expect((await runCall(app, q.callId)).status).toBe(404);
       expect(chain.settleCalls).toHaveLength(1);
     });
 
     it("rejects an unknown call id", async () => {
-      const res = await request(app).post("/run").send({ callId: "0x" + "1".repeat(64) });
+      const res = await request(app)
+        .post("/run")
+        .send({ callId: "0x" + "1".repeat(64), signature: await sign("0x" + "1".repeat(64)) });
       expect(res.status).toBe(404);
+    });
+  });
+
+  /**
+   * A call id travels over HTTP and can be observed. On its own it must not entitle the
+   * holder to output somebody else escrowed for, so redeeming requires proving control
+   * of the account that funded the call.
+   */
+  describe("redemption is bound to the buyer", () => {
+    it("refuses a call id presented without a signature", async () => {
+      const q = await quoteFor();
+      await chain.fundCall(q.callId, "summarize", q.inputTokens);
+      const res = await request(app).post("/run").send({ callId: q.callId });
+      expect(res.status).toBe(400);
+      expect(chain.settleCalls).toHaveLength(0);
+    });
+
+    it("refuses a signature from anyone other than the funder", async () => {
+      const q = await quoteFor();
+      await chain.fundCall(q.callId, "summarize", q.inputTokens);
+
+      const thief = Wallet.createRandom();
+      const res = await request(app).post("/run").send({
+        callId: q.callId,
+        signature: await thief.signMessage(redemptionMessage(q.callId, chain.contractAddress)),
+      });
+
+      expect(res.status).toBe(403);
+      expect(chain.settleCalls).toHaveLength(0);
+    });
+
+    it("refuses a signature bound to a different deployment", async () => {
+      const q = await quoteFor();
+      await chain.fundCall(q.callId, "summarize", q.inputTokens);
+
+      const elsewhere = "0x000000000000000000000000000000000000BEEF";
+      const res = await request(app).post("/run").send({
+        callId: q.callId,
+        signature: await chain.buyerWallet.signMessage(redemptionMessage(q.callId, elsewhere)),
+      });
+
+      expect(res.status).toBe(403);
+    });
+
+    it("refuses a signature for a different call", async () => {
+      const [a, b] = [await quoteFor(), await quoteFor()];
+      await chain.fundCall(a.callId, "summarize", a.inputTokens);
+      const res = await request(app)
+        .post("/run")
+        .send({ callId: a.callId, signature: await sign(b.callId) });
+      expect(res.status).toBe(403);
+    });
+
+    it("rejects a malformed signature", async () => {
+      const q = await quoteFor();
+      await chain.fundCall(q.callId, "summarize", q.inputTokens);
+      const res = await request(app).post("/run").send({ callId: q.callId, signature: "0xnope" });
+      expect(res.status).toBe(401);
+    });
+  });
+
+  /**
+   * `reclaimCall` opens at `expiresAt`. Starting a model call that close to the line
+   * risks the buyer reclaiming mid-flight, which would leave the provider having paid
+   * for work it can no longer settle.
+   */
+  describe("expiry headroom", () => {
+    it("refuses to start a call too close to expiry", async () => {
+      const q = await quoteFor();
+      await chain.fundCall(q.callId, "summarize", q.inputTokens);
+      const call = chain.calls.get(q.callId)!;
+      call.expiresAt = BigInt(Math.floor(Date.now() / 1000) + 60);
+
+      const res = await runCall(app, q.callId);
+      expect(res.status).toBe(409);
+      expect(chain.settleCalls).toHaveLength(0);
     });
   });
 
@@ -144,7 +230,7 @@ describe("payment guards", () => {
           throw error;
         },
       };
-      const brokenApp = createApp({ ai, chain });
+      const brokenApp = createApp({ ai, chain, contractAddress: chain.contractAddress });
       const q = await request(brokenApp).post("/quote").send({ service: "summarize", input: "x" });
       expect(q.status).toBe(200);
       await chain.fundCall(q.body.callId, "summarize", q.body.inputTokens);
@@ -154,13 +240,13 @@ describe("payment guards", () => {
     it("refunds the whole escrow and charges nothing", async () => {
       const { brokenApp, quote } = await fundedCallOn(new Error("upstream 503"));
 
-      const res = await request(brokenApp).post("/run").send({ callId: quote.callId });
+      const res = await runCall(brokenApp, quote.callId);
 
       expect(res.status).toBe(502);
       expect(chain.failCalls).toHaveLength(1);
       expect(chain.settleCalls).toHaveLength(0);
       // Buyer whole again; provider earned nothing.
-      expect(await chain.balanceOf("0x00000000000000000000000000000000000000B0")).toBe(
+      expect(await chain.balanceOf(chain.buyerWallet.address)).toBe(
         BigInt(quote.quoteWei),
       );
       expect(await chain.balanceOf("0x00000000000000000000000000000000000000A1")).toBe(0n);
@@ -168,7 +254,7 @@ describe("payment guards", () => {
 
     it("refunds a model refusal too", async () => {
       const { brokenApp, quote } = await fundedCallOn(new ModelRefusedError("cyber"));
-      const res = await request(brokenApp).post("/run").send({ callId: quote.callId });
+      const res = await runCall(brokenApp, quote.callId);
       expect(res.status).toBe(502);
       expect(chain.failCalls[0]!.reason).toContain("declined");
     });
@@ -186,12 +272,12 @@ describe("payment guards", () => {
           outputTokens: Math.min(10, maxOut),
         }),
       };
-      const app2 = createApp({ ai, chain });
+      const app2 = createApp({ ai, chain, contractAddress: chain.contractAddress });
 
       const q = await request(app2).post("/quote").send({ service: "summarize", input: "x" });
       await chain.fundCall(q.body.callId, "summarize", q.body.inputTokens);
 
-      const res = await request(app2).post("/run").send({ callId: q.body.callId });
+      const res = await runCall(app2, q.body.callId);
       expect(res.status).toBe(200);
       expect(chain.settleCalls[0]!.inputTokens).toBe(100);
       expect(res.body.usage.observedInputTokens).toBe(100_000);

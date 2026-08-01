@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { Contract, HDNodeWallet, JsonRpcProvider, Mnemonic, NonceManager, formatEther } from "ethers";
+import {
+  Contract,
+  HDNodeWallet,
+  JsonRpcProvider,
+  Mnemonic,
+  NonceManager,
+  formatEther,
+  getAddress,
+} from "ethers";
 
 /**
  * Walks one call end to end and prints what it cost.
@@ -68,6 +76,23 @@ function findDeployment(): Deployment | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Prove to the server that we are the account that funded this call. The call id alone
+ * is not authorisation — it travels over HTTP and could be observed.
+ */
+async function signRedemption(
+  wallet: HDNodeWallet,
+  callId: string,
+  contractAddress: string,
+): Promise<string> {
+  const message = [
+    "Tollgate: redeem call",
+    `call: ${callId}`,
+    `contract: ${getAddress(contractAddress)}`,
+  ].join("\n");
+  return wallet.signMessage(message);
 }
 
 async function main() {
@@ -156,7 +181,7 @@ async function main() {
     output: string;
     usage: { inputTokens: number; outputTokens: number; maxOutputTokens: number };
     settlement: { escrowedWei: string; costWei: string; refundWei: string; txHash: string };
-  }>("/run", { callId: quote.callId });
+  }>("/run", { callId: quote.callId, signature: await signRedemption(buyer, quote.callId, deployment.address) });
   console.log(`  completed in ${((Date.now() - started) / 1000).toFixed(1)}s\n`);
   console.log(
     run.output
