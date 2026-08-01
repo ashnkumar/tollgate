@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import type { Tollgate } from "../typechain-types";
 import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
@@ -219,6 +220,68 @@ describe("Tollgate", () => {
       await expect(
         tollgate.connect(settler).settleCall(id("ghost"), 1, 1),
       ).to.be.revertedWithCustomError(tollgate, "NoSuchCall");
+    });
+
+    /**
+     * A call is a contract between the two parties at the moment it was funded. The
+     * provider must not be able to move the terms underneath a call that is already in
+     * flight — not to charge more (the escrow blocks that), but also not to make a
+     * funded call impossible to settle, which would strand the buyer's money until the
+     * timeout and pay the provider nothing.
+     */
+    describe("terms are fixed when the call is funded", () => {
+      it("settles at the quoted rates after the provider raises prices", async () => {
+        await tollgate
+          .connect(provider)
+          .updateService(SERVICE, settler.address, BASE * 1000n, PER_IN * 1000n, PER_OUT * 1000n, MAX_OUT);
+
+        const OUT = 40n;
+        const cost = costOf(IN, OUT); // the *old* rate card
+        await expect(tollgate.connect(settler).settleCall(callId, Number(IN), Number(OUT)))
+          .to.emit(tollgate, "CallSettled")
+          .withArgs(callId, SERVICE, buyer.address, IN, OUT, cost, anyValue, anyValue, quoted - cost);
+      });
+
+      it("still accepts output up to the ceiling quoted, after the provider lowers it", async () => {
+        await tollgate
+          .connect(provider)
+          .updateService(SERVICE, settler.address, BASE, PER_IN, PER_OUT, 10);
+
+        await expect(tollgate.connect(settler).settleCall(callId, Number(IN), MAX_OUT)).to.emit(
+          tollgate,
+          "CallSettled",
+        );
+      });
+
+      it("keeps the settler that was in place when the call was funded", async () => {
+        await tollgate
+          .connect(provider)
+          .updateService(SERVICE, stranger.address, BASE, PER_IN, PER_OUT, MAX_OUT);
+
+        // The settler that actually performed the work can still settle it.
+        await expect(tollgate.connect(settler).settleCall(callId, Number(IN), 40)).to.emit(
+          tollgate,
+          "CallSettled",
+        );
+      });
+
+      it("does not let a newly appointed settler settle an older call", async () => {
+        await tollgate
+          .connect(provider)
+          .updateService(SERVICE, stranger.address, BASE, PER_IN, PER_OUT, MAX_OUT);
+
+        await expect(
+          tollgate.connect(stranger).settleCall(callId, Number(IN), 40),
+        ).to.be.revertedWithCustomError(tollgate, "NotSettler");
+      });
+
+      it("pays the provider that owned the service when the call was funded", async () => {
+        // Handing the service to someone else must not redirect earnings on a call the
+        // previous provider already took money for.
+        await tollgate.connect(provider).setServiceActive(SERVICE, true);
+        await tollgate.connect(settler).settleCall(callId, Number(IN), 40);
+        expect(await tollgate.balances(provider.address)).to.be.greaterThan(0n);
+      });
     });
 
     it("settles a call whose service was deactivated mid-flight", async () => {

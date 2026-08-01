@@ -15,7 +15,10 @@ import {
 export const TOLLGATE_ABI = [
   "function quote(bytes32 serviceId, uint32 inputTokens) view returns (uint256)",
   "function services(bytes32) view returns (address provider, uint32 maxOutputTokens, bool active, address settler, uint128 baseFeeWei, uint128 perInputTokenWei, uint128 perOutputTokenWei)",
-  "function calls(bytes32) view returns (bytes32 serviceId, address buyer, uint128 escrowWei, uint32 quotedInputTokens, uint64 expiresAt, bool settled)",
+  // Mirrors the Call struct field-for-field, in declaration order. A call carries a
+  // frozen copy of the terms it was funded under, so these are the terms that govern
+  // settlement — not whatever the provider's service says now.
+  "function calls(bytes32) view returns (bytes32 serviceId, address buyer, uint32 quotedInputTokens, uint32 maxOutputTokens, bool settled, address provider, uint64 expiresAt, address settler, uint128 escrowWei, uint128 baseFeeWei, uint128 perInputTokenWei, uint128 perOutputTokenWei)",
   "function settleCall(bytes32 callId, uint32 inputTokens, uint32 outputTokens)",
   "function failCall(bytes32 callId, string reason)",
   "function balances(address) view returns (uint256)",
@@ -78,10 +81,16 @@ interface TollgateMethods {
   calls(callId: string): Promise<{
     serviceId: string;
     buyer: string;
-    escrowWei: bigint;
     quotedInputTokens: bigint;
-    expiresAt: bigint;
+    maxOutputTokens: bigint;
     settled: boolean;
+    provider: string;
+    expiresAt: bigint;
+    settler: string;
+    escrowWei: bigint;
+    baseFeeWei: bigint;
+    perInputTokenWei: bigint;
+    perOutputTokenWei: bigint;
   }>;
   settleCall(callId: string, inputTokens: number, outputTokens: number): Promise<ContractTransactionResponse>;
   failCall(callId: string, reason: string): Promise<ContractTransactionResponse>;

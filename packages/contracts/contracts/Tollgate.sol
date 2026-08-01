@@ -16,8 +16,9 @@ pragma solidity 0.8.24;
 ///           the exact input size. Bounded above by `maxOutputTokens`, so it is the
 ///           worst case, not an estimate. The buyer escrows exactly this.
 ///        2. `settleCall()` — the settler reports the *token counts* it observed. The
-///           price is recomputed here, from the same on-chain rate card. The settler
-///           never names a price, so it cannot invent one, and `settle` reverts if the
+///           price is recomputed here, from the rate card the call was funded under (a
+///           copy frozen into the call, not the provider's live one). The settler never
+///           names a price, so it cannot invent one, and `settle` reverts if the
 ///           computed cost exceeds what the buyer escrowed.
 ///
 ///      What the settler can still do is misreport usage, bounded by the escrow. That
@@ -42,13 +43,31 @@ contract Tollgate {
         uint128 perOutputTokenWei;
     }
 
+    /// @dev A call carries its own copy of the terms it was funded under.
+    ///
+    ///      Reading them back off the live `Service` at settlement time looks equivalent
+    ///      and is not: the provider can edit a service while a call is in flight. Raising
+    ///      the rates then makes settlement exceed the escrow, lowering `maxOutputTokens`
+    ///      makes the real output unreportable, and changing `settler` locks out the
+    ///      machine that actually did the work. In each case the escrow still protects the
+    ///      buyer from being overcharged, but the call becomes impossible to settle — the
+    ///      buyer's funds sit until `CALL_TIMEOUT` and the provider earns nothing.
+    ///
+    ///      Snapshotting costs three extra storage slots per call and makes a funded call
+    ///      immune to anything the provider does afterwards.
     struct Call {
         bytes32 serviceId;
         address buyer;
-        uint128 escrowWei;
         uint32 quotedInputTokens;
-        uint64 expiresAt;
+        uint32 maxOutputTokens;
         bool settled;
+        address provider;
+        uint64 expiresAt;
+        address settler;
+        uint128 escrowWei;
+        uint128 baseFeeWei;
+        uint128 perInputTokenWei;
+        uint128 perOutputTokenWei;
     }
 
     // ─────────────────────────────────────────── state ──
@@ -176,8 +195,9 @@ contract Tollgate {
         );
     }
 
-    /// @notice Change a service's rate card. Only affects calls opened after this point;
-    ///         calls already in flight settle against the escrow they were quoted.
+    /// @notice Change a service's rate card. Affects only calls opened after this point —
+    ///         calls already in flight carry their own copy of the terms and settle against
+    ///         that, so changing rates, the ceiling, or the settler cannot disturb them.
     function updateService(
         bytes32 serviceId,
         address settler_,
@@ -214,7 +234,7 @@ contract Tollgate {
     function quote(bytes32 serviceId, uint32 inputTokens) public view returns (uint256) {
         Service memory s = services[serviceId];
         if (s.provider == address(0)) revert NoSuchService();
-        return _cost(s, inputTokens, s.maxOutputTokens);
+        return _cost(s.baseFeeWei, s.perInputTokenWei, s.perOutputTokenWei, inputTokens, s.maxOutputTokens);
     }
 
     // ─────────────────────────────────────────── calls ──
@@ -228,17 +248,25 @@ contract Tollgate {
         if (!s.active) revert ServiceInactive();
         if (calls[callId].buyer != address(0)) revert CallExists();
 
-        uint256 required = _cost(s, inputTokens, s.maxOutputTokens);
+        uint256 required = _cost(s.baseFeeWei, s.perInputTokenWei, s.perOutputTokenWei, inputTokens, s.maxOutputTokens);
         if (msg.value < required) revert Underfunded(required, msg.value);
 
         uint64 expiresAt = uint64(block.timestamp) + CALL_TIMEOUT;
         calls[callId] = Call({
             serviceId: serviceId,
             buyer: msg.sender,
-            escrowWei: uint128(msg.value),
             quotedInputTokens: inputTokens,
+            // Terms frozen here. Nothing the provider does from now on can change what
+            // this call costs, who may settle it, or whether it can be settled at all.
+            maxOutputTokens: s.maxOutputTokens,
+            settled: false,
+            provider: s.provider,
             expiresAt: expiresAt,
-            settled: false
+            settler: s.settler,
+            escrowWei: uint128(msg.value),
+            baseFeeWei: s.baseFeeWei,
+            perInputTokenWei: s.perInputTokenWei,
+            perOutputTokenWei: s.perOutputTokenWei
         });
 
         emit CallOpened(callId, serviceId, msg.sender, inputTokens, msg.value, expiresAt);
@@ -254,12 +282,12 @@ contract Tollgate {
         if (c.buyer == address(0)) revert NoSuchCall();
         if (c.settled) revert AlreadySettled();
 
-        Service memory s = services[c.serviceId];
-        if (msg.sender != s.settler) revert NotSettler();
-        if (outputTokens > s.maxOutputTokens) revert OutputOverCap(outputTokens, s.maxOutputTokens);
+        // Everything below reads the terms frozen at openCall, never the live service.
+        if (msg.sender != c.settler) revert NotSettler();
+        if (outputTokens > c.maxOutputTokens) revert OutputOverCap(outputTokens, c.maxOutputTokens);
 
         uint256 escrow = c.escrowWei;
-        uint256 cost = _cost(s, inputTokens, outputTokens);
+        uint256 cost = _cost(c.baseFeeWei, c.perInputTokenWei, c.perOutputTokenWei, inputTokens, outputTokens);
         if (cost > escrow) revert CostExceedsEscrow(cost, escrow);
 
         c.settled = true;
@@ -268,7 +296,7 @@ contract Tollgate {
         uint256 providerWei = cost - feeWei;
         uint256 refundWei = escrow - cost;
 
-        balances[s.provider] += providerWei;
+        balances[c.provider] += providerWei;
         if (feeWei > 0) balances[treasury] += feeWei;
         if (refundWei > 0) balances[c.buyer] += refundWei;
 
@@ -284,7 +312,7 @@ contract Tollgate {
         Call storage c = calls[callId];
         if (c.buyer == address(0)) revert NoSuchCall();
         if (c.settled) revert AlreadySettled();
-        if (msg.sender != services[c.serviceId].settler) revert NotSettler();
+        if (msg.sender != c.settler) revert NotSettler();
 
         c.settled = true;
         balances[c.buyer] += c.escrowWei;
@@ -325,10 +353,19 @@ contract Tollgate {
 
     // ────────────────────────────────────── internals ──
 
-    function _cost(Service memory s, uint32 inputTokens, uint32 outputTokens) private pure returns (uint256) {
+    /// @dev Takes rates explicitly rather than a Service, so callers must be deliberate
+    ///      about whether they are pricing against the live rate card (a new quote) or the
+    ///      terms a call was funded under (settlement).
+    function _cost(
+        uint128 baseFeeWei,
+        uint128 perInputTokenWei,
+        uint128 perOutputTokenWei,
+        uint32 inputTokens,
+        uint32 outputTokens
+    ) private pure returns (uint256) {
         // uint32 * uint128 tops out around 2**160 — no overflow risk in uint256.
-        return uint256(s.baseFeeWei) + (uint256(inputTokens) * s.perInputTokenWei)
-            + (uint256(outputTokens) * s.perOutputTokenWei);
+        return uint256(baseFeeWei) + (uint256(inputTokens) * perInputTokenWei)
+            + (uint256(outputTokens) * perOutputTokenWei);
     }
 
     function _ownedService(bytes32 serviceId) private view returns (Service storage s) {
