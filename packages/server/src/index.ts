@@ -25,4 +25,8 @@ app.listen(config.port, () => {
   console.log(`rpc:      ${config.rpcUrl}`);
   console.log(`contract: ${config.tollgateAddress}`);
   console.log(`settler:  ${chain.settlerAddress}`);
+  if (config.usingLocalDefaults) {
+    console.log("\n  Using local development defaults (deployment.json and the Hardhat dev key).");
+    console.log("  Set TOLLGATE_ADDRESS and SETTLER_PRIVATE_KEY for anything else.");
+  }
 });

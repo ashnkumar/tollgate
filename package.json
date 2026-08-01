@@ -13,8 +13,8 @@
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
     "chain": "pnpm --filter @tollgate/contracts chain",
-    "deploy": "pnpm --filter @tollgate/contracts deploy",
-    "server": "pnpm --filter @tollgate/server start",
+    "deploy:local": "pnpm --filter @tollgate/contracts deploy:local",
+    "serve": "pnpm --filter @tollgate/server start",
     "demo": "pnpm --filter @tollgate/demo start"
   },
   "devDependencies": {

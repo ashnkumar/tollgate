@@ -1,6 +1,7 @@
 import {
   Contract,
   JsonRpcProvider,
+  NonceManager,
   Wallet,
   type ContractTransactionResponse,
   type TransactionReceipt,
@@ -94,7 +95,13 @@ export class TollgateChain implements Chain {
   constructor(rpcUrl: string, address: string, settlerPrivateKey: string) {
     const provider = new JsonRpcProvider(rpcUrl);
     this.settler = new Wallet(settlerPrivateKey, provider);
-    this.contract = new Contract(address, TOLLGATE_ABI, this.settler) as Contract & TollgateMethods;
+    // Settlements are independent transactions from one key, so concurrent calls can
+    // otherwise collide on a stale nonce. NonceManager serialises them.
+    this.contract = new Contract(
+      address,
+      TOLLGATE_ABI,
+      new NonceManager(this.settler),
+    ) as Contract & TollgateMethods;
   }
 
   get settlerAddress(): string {
