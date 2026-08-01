@@ -147,7 +147,7 @@ Nothing here is specific to a particular chain. It is plain EVM; point `RPC_URL`
 ## Tests
 
 ```bash
-pnpm test                   # 39 contract tests + 24 server tests, all offline
+pnpm test                   # 39 contract tests + 27 server tests, all offline
 ./scripts/smoke.sh          # the whole stack against a real chain
 RUN_LIVE_TESTS=1 pnpm test  # adds 4 tests against the real Anthropic API
 ```
@@ -170,7 +170,9 @@ honest one.
   so a dishonest settler can over-report up to the escrow but no further. Closing that
   gap properly needs an oracle, a TEE, or a proof of inference. All out of scope.
 - **Quotes are held in process memory**, so `/run` must reach the process that issued the
-  `/quote`. Fine for one server; a horizontally scaled deployment needs a shared store.
+  `/quote`. Fine for one server; a horizontally scaled deployment needs a shared store —
+  and note the single-use guard is per-process too, so scaling out without moving both
+  to shared state would reopen the duplicate-execution window.
 - **One provider identity in the demo.** The contract supports any number — anyone can
   call `registerService` — but the seed script registers all three services to one
   address for legibility.

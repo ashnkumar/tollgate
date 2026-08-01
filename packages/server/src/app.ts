@@ -54,6 +54,19 @@ export function redemptionMessage(callId: string, contractAddress: string): stri
  */
 const SETTLEMENT_HEADROOM_SECONDS = 300n;
 
+/**
+ * How long an unredeemed quote is kept. Comfortably shorter than the contract's
+ * one-hour `CALL_TIMEOUT`, so a quote can never outlive the call it priced.
+ */
+const QUOTE_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Ceiling on unredeemed quotes held at once. `/quote` is unauthenticated and each entry
+ * pins the caller's input string, so without a cap it is an unbounded allocation
+ * controlled by whoever is calling.
+ */
+const MAX_PENDING_QUOTES = 1000;
+
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -70,6 +83,20 @@ export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
    * process needs a shared store, since /run must land where /quote was issued.
    */
   const pending = new Map<string, PendingQuote>();
+
+  /**
+   * Call ids currently being redeemed. Claimed synchronously so two concurrent requests
+   * cannot both pass the pending-quote check before either has consumed it.
+   */
+  const inFlight = new Set<string>();
+
+  /** Drop quotes nobody funded. Cheap, and runs on the path that creates them. */
+  const pruneExpiredQuotes = () => {
+    const cutoff = Date.now() - QUOTE_TTL_MS;
+    for (const [id, quote] of pending) {
+      if (quote.issuedAt < cutoff) pending.delete(id);
+    }
+  };
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true, settler: chain.settlerAddress });
@@ -131,6 +158,12 @@ export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
     }
 
     const quoteWei = await chain.quote(serviceId(slug), inputTokens);
+
+    pruneExpiredQuotes();
+    if (pending.size >= MAX_PENDING_QUOTES) {
+      throw new HttpError(503, "Too many unredeemed quotes outstanding; retry shortly");
+    }
+
     const callId = hexlify(randomBytes(32));
 
     pending.set(callId, {
@@ -170,6 +203,24 @@ export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
     const quote = pending.get(callId);
     if (!quote) throw new HttpError(404, "Unknown or already-used callId");
 
+    // Claimed before the first await. Everything below runs at most once per call id,
+    // however many requests arrive together.
+    if (inFlight.has(callId)) throw new HttpError(409, "This call is already being run");
+    inFlight.add(callId);
+    try {
+      return await redeem(callId, quote, signature, res);
+    } finally {
+      inFlight.delete(callId);
+    }
+  });
+
+  /** The body of a redemption, once the call id has been exclusively claimed. */
+  async function redeem(
+    callId: string,
+    quote: PendingQuote,
+    signature: string,
+    res: Response,
+  ): Promise<void> {
     const onChainCall = await chain.getCall(callId);
     if (onChainCall.missing) throw new HttpError(402, "Call has not been funded on-chain");
     if (onChainCall.settled) throw new HttpError(409, "Call is already settled");
@@ -246,7 +297,7 @@ export function createApp({ ai, chain, contractAddress }: AppDeps): Express {
         txHash: receipt.hash,
       },
     });
-  });
+  }
 
   app.use((_req, res) => {
     res.status(404).json({ error: "Not found" });

@@ -180,6 +180,27 @@ call started a minute before that could have its escrow reclaimed while the mode
 still running, leaving the provider having paid for work it can no longer settle. Five
 minutes of required headroom removes the race instead of losing it politely.
 
+**A call id is claimed synchronously before any `await`.** `/run` checked the pending
+quote, then did several awaits, then consumed it. Under concurrent requests for one call
+id, every request cleared the check before any of them consumed it, so the model ran
+several times while only the first settlement succeeded — the provider is billed per
+model call by Anthropic and can charge once, so this drained the provider rather than
+merely wasting work. The id is now claimed in the same synchronous run as the check.
+
+The regression test for this was initially worthless, which is worth recording: the
+in-memory `FakeChain` resolved every method immediately, and an `async` function that
+resolves immediately only yields to the *microtask* queue. Inbound HTTP requests arrive
+as *macrotasks*, so one request ran start-to-finish before the next handler was entered
+and no overlap was possible. The fake now defers by a real tick, the way an RPC round
+trip does. With the guard removed, five concurrent requests produce four model calls;
+with it, one.
+
+**Unredeemed quotes expire and are capped.** `/quote` is unauthenticated and each entry
+pins the caller's input string, so an unbounded map is an allocation an anonymous caller
+controls. Quotes now expire after fifteen minutes — comfortably inside the contract's
+one-hour `CALL_TIMEOUT`, so a quote can never outlive the call it priced — and the store
+refuses to grow past a fixed ceiling.
+
 **In-memory quote store.** `/run` must land on the process that issued the `/quote`, so
 this does not survive horizontal scaling. It is called out in the code rather than
 papered over — the alternative is a Redis dependency that adds a service to the quickstart
@@ -201,7 +222,7 @@ scripts/smoke.sh     full stack against a real chain; what CI runs
 | Suite | Covers | Needs |
 |---|---|---|
 | `packages/contracts` (39) | escrow, settlement arithmetic, frozen terms, fee split, refunds, expiry, withdrawal, access control | nothing |
-| `packages/server` (24) | quoting, escrow verification, redemption signatures, expiry headroom, single-use call ids, failure refunds, input clamping | nothing |
+| `packages/server` (27) | quoting, escrow verification, redemption signatures, concurrent redemption, quote expiry and capacity, expiry headroom, single-use call ids, failure refunds, input clamping | nothing |
 | `live-anthropic.test.ts` (4) | count-before matches count-after; `max_tokens` is enforced | `RUN_LIVE_TESTS=1` + key |
 | `scripts/smoke.sh` | the whole stack against a real chain | nothing |
 

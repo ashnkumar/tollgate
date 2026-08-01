@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import { Wallet } from "ethers";
 import type { Express } from "express";
@@ -197,6 +197,97 @@ describe("payment guards", () => {
       await chain.fundCall(q.callId, "summarize", q.inputTokens);
       const res = await request(app).post("/run").send({ callId: q.callId, signature: "0xnope" });
       expect(res.status).toBe(401);
+    });
+  });
+
+  /**
+   * Single-use has to mean single-use under concurrency, not just in sequence.
+   *
+   * The check and the claim are separated by awaits, so without an explicit guard two
+   * simultaneous requests can both pass the "is this id still pending" test and both
+   * reach the model. The second settlement then reverts as already-settled — but the
+   * provider has already been billed by Anthropic twice and can only charge once, so
+   * this is a direct drain on the provider rather than a harmless duplicate.
+   */
+  describe("concurrent redemption", () => {
+    it("runs the model once when the same call id is redeemed twice at once", async () => {
+      let modelCalls = 0;
+      const ai: AiClient = {
+        countInputTokens: async () => 50,
+        run: async (_s, _i, maxOut) => {
+          modelCalls += 1;
+          await new Promise((r) => setTimeout(r, 25)); // hold the turn open
+          return { text: "ok", inputTokens: 50, outputTokens: Math.min(10, maxOut) };
+        },
+      };
+      const slowApp = createApp({ ai, chain, contractAddress: chain.contractAddress });
+
+      /**
+       * Driven over a real socket rather than through supertest. Supertest awaits each
+       * request to completion, so requests issued from one `Promise.all` still arrive
+       * one after another and a genuine overlap never occurs — this assertion is
+       * meaningless without a listening server.
+       */
+      const server = slowApp.listen(0);
+      try {
+        await new Promise((resolve) => server.once("listening", resolve));
+        const port = (server.address() as { port: number }).port;
+        const post = (path: string, body: unknown) =>
+          fetch(`http://127.0.0.1:${port}${path}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+
+        const quoted = await (await post("/quote", { service: "summarize", input: "x" })).json();
+        await chain.fundCall(quoted.callId, "summarize", quoted.inputTokens);
+        const signature = await sign(quoted.callId);
+
+        const responses = await Promise.all(
+          Array.from({ length: 5 }, () => post("/run", { callId: quoted.callId, signature })),
+        );
+
+        // The provider is billed by Anthropic per model call but can only charge once.
+        expect(modelCalls).toBe(1);
+        expect(chain.settleCalls).toHaveLength(1);
+        expect(responses.filter((r) => r.status === 200)).toHaveLength(1);
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    });
+  });
+
+  /**
+   * Quotes are held in memory until redeemed. Without a bound, anyone can mint them for
+   * free and each one pins the caller's input string, so the map is an unbounded
+   * allocation an unauthenticated caller controls.
+   */
+  describe("quote store is bounded", () => {
+    it("expires quotes that were never funded", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const q = await quoteFor();
+
+        // Past the TTL, then mint another quote — pruning runs on that path.
+        vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+        await request(app).post("/quote").send({ service: "summarize", input: "later" });
+
+        await chain.fundCall(q.callId, "summarize", q.inputTokens);
+        const res = await runCall(app, q.callId);
+        expect(res.status).toBe(404);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("refuses to mint unbounded quotes", async () => {
+      // Far more than the cap, minted without ever funding any of them.
+      let rejected = 0;
+      for (let i = 0; i < 1200; i += 1) {
+        const res = await request(app).post("/quote").send({ service: "summarize", input: `x${i}` });
+        if (res.status === 503) rejected += 1;
+      }
+      expect(rejected).toBeGreaterThan(0);
     });
   });
 

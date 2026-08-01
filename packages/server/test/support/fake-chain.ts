@@ -4,10 +4,20 @@ import { serviceId } from "../../src/catalogue.js";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
+/** Yield to the macrotask queue, the way a real RPC call would. */
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 /**
  * In-memory stand-in for the contract. Mirrors the parts of Tollgate's behaviour the
  * server relies on — notably that cost is recomputed from the stored rate card, so a
  * test cannot accidentally assert against a price the server invented.
+ *
+ * Every method yields to the event loop before returning. This is not decoration: an
+ * `async` method that resolves immediately only yields to the microtask queue, while
+ * inbound HTTP requests arrive as macrotasks. A fake built that way lets one request
+ * run start-to-finish before the next handler is even entered, so concurrency bugs
+ * that a real RPC round trip would expose become invisible. `tick()` makes the fake
+ * behave like the network it stands in for.
  */
 export class FakeChain implements Chain {
   readonly settlerAddress = "0x000000000000000000000000000000000000dEaD";
@@ -52,16 +62,19 @@ export class FakeChain implements Chain {
   }
 
   async quote(sid: string, inputTokens: number): Promise<bigint> {
+    await tick();
     const s = this.services.get(sid);
     if (!s) throw new Error("NoSuchService");
     return s.baseFeeWei + BigInt(inputTokens) * s.perInputTokenWei + BigInt(s.maxOutputTokens) * s.perOutputTokenWei;
   }
 
   async getService(sid: string): Promise<OnChainService | undefined> {
+    await tick();
     return this.services.get(sid);
   }
 
   async getCall(callId: string): Promise<OnChainCall> {
+    await tick();
     const c = this.calls.get(callId);
     if (c) return c;
     return {
@@ -76,6 +89,7 @@ export class FakeChain implements Chain {
   }
 
   async settleCall(callId: string, inputTokens: number, outputTokens: number): Promise<{ hash: string }> {
+    await tick();
     const call = this.calls.get(callId);
     if (!call) throw new Error("NoSuchCall");
     if (call.settled) throw new Error("AlreadySettled");
@@ -94,6 +108,7 @@ export class FakeChain implements Chain {
   }
 
   async failCall(callId: string, reason: string): Promise<{ hash: string }> {
+    await tick();
     const call = this.calls.get(callId);
     if (!call) throw new Error("NoSuchCall");
     call.settled = true;
