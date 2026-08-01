@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+
+# hardhat
+artifacts/
+cache/
+typechain-types/
+
+# os
+.DS_Store
