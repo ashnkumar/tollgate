@@ -155,7 +155,7 @@ async function main() {
     quoteWei: string;
   }>("/quote", { service: slug, input });
 
-  console.log(`  input counted    ${quote.inputTokens} tokens (exact, before the call runs)`);
+  console.log(`  input counted    ${quote.inputTokens} tokens (before the call runs)`);
   console.log(`  output ceiling   ${quote.maxOutputTokens} tokens (enforced as max_tokens)`);
   console.log(`  worst case       ${formatEther(quote.quoteWei)} ETH`);
 

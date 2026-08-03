@@ -46,17 +46,30 @@ export class FakeChain implements Chain {
     return service;
   }
 
-  /** Fund a call the way a buyer would, escrowing exactly the quote. */
+  /**
+   * Fund a call the way a buyer would, escrowing exactly the quote.
+   *
+   * The terms are copied onto the call, because that is what `openCall` does: a funded
+   * call carries the rate card it was funded under, and everything downstream is
+   * checked against that copy rather than against whatever the provider says now.
+   */
   async fundCall(callId: string, slug: string, inputTokens: number, escrow?: bigint): Promise<void> {
     const sid = serviceId(slug);
     const amount = escrow ?? (await this.quote(sid, inputTokens));
+    const s = this.services.get(sid);
+    if (!s) throw new Error("NoSuchService");
     this.calls.set(callId, {
       serviceId: sid,
       buyer: this.buyerWallet.address,
       escrowWei: amount,
       quotedInputTokens: inputTokens,
+      maxOutputTokens: s.maxOutputTokens,
       expiresAt: BigInt(Math.floor(Date.now() / 1000) + 3600),
       settled: false,
+      settler: s.settler,
+      baseFeeWei: s.baseFeeWei,
+      perInputTokenWei: s.perInputTokenWei,
+      perOutputTokenWei: s.perOutputTokenWei,
       missing: false,
     });
   }
@@ -82,23 +95,36 @@ export class FakeChain implements Chain {
       buyer: ZERO,
       escrowWei: 0n,
       quotedInputTokens: 0,
+      maxOutputTokens: 0,
       expiresAt: 0n,
       settled: false,
+      settler: ZERO,
+      baseFeeWei: 0n,
+      perInputTokenWei: 0n,
+      perOutputTokenWei: 0n,
       missing: true,
     };
   }
 
+  /** Settles against the call's frozen terms, exactly as the contract does. */
   async settleCall(callId: string, inputTokens: number, outputTokens: number): Promise<{ hash: string }> {
     await tick();
     const call = this.calls.get(callId);
     if (!call) throw new Error("NoSuchCall");
     if (call.settled) throw new Error("AlreadySettled");
+    if (inputTokens > call.quotedInputTokens) throw new Error("InputOverQuote");
+    if (outputTokens > call.maxOutputTokens) throw new Error("OutputOverCap");
+
+    const cost =
+      call.baseFeeWei +
+      BigInt(inputTokens) * call.perInputTokenWei +
+      BigInt(outputTokens) * call.perOutputTokenWei;
+    if (cost > call.escrowWei) throw new Error("CostExceedsEscrow");
+
+    // The provider is still read live: the contract stores it on the call too, but the
+    // server never reads it, so there is nothing here for it to get wrong.
     const s = this.services.get(call.serviceId);
     if (!s) throw new Error("NoSuchService");
-    if (outputTokens > s.maxOutputTokens) throw new Error("OutputOverCap");
-
-    const cost = s.baseFeeWei + BigInt(inputTokens) * s.perInputTokenWei + BigInt(outputTokens) * s.perOutputTokenWei;
-    if (cost > call.escrowWei) throw new Error("CostExceedsEscrow");
 
     call.settled = true;
     this.balances.set(s.provider, (this.balances.get(s.provider) ?? 0n) + cost);

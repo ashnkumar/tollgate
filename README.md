@@ -14,12 +14,12 @@ An AI call costs a variable amount — tokens in, tokens out, and you don't know
 output length until it's finished. A buyer wants a price *before* they agree. Tollgate
 resolves that by splitting price into two moments:
 
-**Before the call**, input tokens are counted exactly and output is capped, so the worst
-case is arithmetic rather than a guess:
+**Before the call**, input tokens are counted and output is capped, so the worst case is
+arithmetic rather than a guess:
 
 ```
 worst case = baseFee + (inputTokens x inputRate) + (maxOutputTokens x outputRate)
-                       ^ counted exactly          ^ enforced as max_tokens
+                       ^ counted up front         ^ enforced as max_tokens
 ```
 
 **After the call**, the same rate card is applied to what was really used, and the
@@ -99,7 +99,7 @@ Real output, `pnpm demo explain-code` against the Anthropic API:
 
 ```
 2. Quote
-  input counted    174 tokens (exact, before the call runs)
+  input counted    174 tokens (before the call runs)
   output ceiling   1200 tokens (enforced as max_tokens)
   worst case       0.007174 ETH
   chain agrees     0.007174 ETH ✓
@@ -149,7 +149,10 @@ on-chain from the published rate card, and settlement reverts if it would exceed
 escrow. So the quote is a hard ceiling enforced by the contract, not a promise.
 
 Refunds and earnings accrue to a withdrawable balance rather than being transferred. For
-per-call amounts that matters: a pushed refund can cost more gas than it returns.
+per-call amounts that matters: a pushed refund can cost more gas than it returns. A
+holder can withdraw to an address of their choosing, because buyers and providers may be
+contracts that cannot receive a plain transfer — and a balance that is correctly recorded
+and permanently unreachable is not a refund.
 
 Design decisions and their reasoning are in **[SPEC.md](SPEC.md)**.
 
@@ -177,7 +180,7 @@ Nothing here is specific to a particular chain. It is plain EVM; point `RPC_URL`
 ## Tests
 
 ```bash
-pnpm test                   # 39 contract + 32 server + 14 web tests, all offline
+pnpm test                   # 44 contract + 36 server + 14 web tests, all offline
 ./scripts/smoke.sh          # the whole stack against a real chain
 RUN_LIVE_TESTS=1 pnpm test  # adds 4 tests against the real Anthropic API
 ```
@@ -203,10 +206,18 @@ honest one.
   never a price, cost is recomputed on-chain, and settlement reverts above the escrow —
   so a dishonest settler can over-report up to the escrow but no further. Closing that
   gap properly needs an oracle, a TEE, or a proof of inference. All out of scope.
-- **Quotes are held in process memory**, so `/run` must reach the process that issued the
-  `/quote`. Fine for one server; a horizontally scaled deployment needs a shared store —
-  and note the single-use guard is per-process too, so scaling out without moving both
-  to shared state would reopen the duplicate-execution window.
+- **Call state is held in process memory**, so `/run` must reach the process that issued
+  the `/quote`. Fine for one server; a horizontally scaled deployment needs a shared
+  store — and note the single-use guard is per-process too, so scaling out without moving
+  both to shared state would reopen the duplicate-execution window.
+- **There is no recovery for a call that dies mid-flight.** If the server is restarted
+  between funding and running, the quote is gone and the buyer waits out `CALL_TIMEOUT`
+  before reclaiming. If it dies between the model call and settlement, the output is lost
+  and the provider has paid for it. Escrow is never lost either way — the buyer can
+  always reclaim — but "never lost" is a weaker promise than "always delivered". A
+  production version needs a durable, idempotent call state machine: funded, running,
+  generated, settled, with the result persisted before settlement is attempted and
+  retried out of band. That is a substantially bigger system than this one.
 - **One provider identity in the demo.** The contract supports any number — anyone can
   call `registerService` — but the seed script registers all three services to one
   address for legibility.
@@ -215,6 +226,14 @@ honest one.
   retried, but if the transaction ultimately does not land the call stays open until the
   buyer reclaims and the provider is out of pocket. A production deployment would persist
   unsettled calls and retry them out of band rather than only within the request.
+- **The model call is not retried, on purpose.** The SDK's automatic retries are turned
+  off: a connection that drops after the API has begun work still bills for that work, so
+  a retry can produce a second billable generation for a call the contract charges once.
+  Failing instead refunds the buyer in full. The cost is that a blip fails a call which
+  might have succeeded.
+- **The input count is an estimate.** `count_tokens` is documented as one, and settlement
+  bills the lower of counted and observed, so the provider absorbs any divergence and the
+  buyer's ceiling holds. See [SPEC.md](SPEC.md#who-carries-the-estimation-risk).
 - **The browser walkthrough is a local-chain demo.** It holds a published Hardhat
   development key so the quickstart needs no wallet extension. Pointing it at anything
   other than a local node would mean asking a real wallet for the two signatures — a

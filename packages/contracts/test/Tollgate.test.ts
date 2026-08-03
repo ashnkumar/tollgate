@@ -390,6 +390,64 @@ describe("Tollgate", () => {
       await tollgate.connect(treasury).withdraw();
       expect(await ethers.provider.getBalance(await tollgate.getAddress())).to.equal(0n);
     });
+
+    it("pays a chosen recipient and still zeroes the caller's balance", async () => {
+      const owed = await tollgate.balances(provider.address);
+      await expect(
+        tollgate.connect(provider).withdrawTo(stranger.address),
+      ).to.changeEtherBalance(stranger, owed);
+      expect(await tollgate.balances(provider.address)).to.equal(0n);
+      // The balance moved, not the entitlement: nobody else gained a claim.
+      expect(await tollgate.balances(stranger.address)).to.equal(0n);
+    });
+
+    it("refuses the zero address", async () => {
+      await expect(
+        tollgate.connect(provider).withdrawTo(ethers.ZeroAddress),
+      ).to.be.revertedWithCustomError(tollgate, "ZeroAddress");
+    });
+  });
+
+  /**
+   * A buyer, a provider or the treasury may be a contract, and most contracts cannot
+   * receive a plain native transfer. Paying only `msg.sender` would record those
+   * balances correctly and leave them permanently unreachable.
+   */
+  describe("an account that cannot receive a plain transfer", () => {
+    const CALL = id("contract-buyer");
+    let contractBuyer: Awaited<ReturnType<typeof deployRejector>>;
+
+    const deployRejector = async (value: bigint) => {
+      const factory = await ethers.getContractFactory("RejectsPayment");
+      const deployed = await factory.deploy(await tollgate.getAddress(), { value });
+      await deployed.waitForDeployment();
+      return deployed;
+    };
+
+    beforeEach(async () => {
+      const q = await tollgate.quote(SERVICE, 100);
+      contractBuyer = await deployRejector(q);
+      await contractBuyer.open(CALL, SERVICE, 100, q);
+      // Settle well under the ceiling so there is a refund to strand.
+      await tollgate.connect(settler).settleCall(CALL, 100, 40);
+      expect(await tollgate.balances(await contractBuyer.getAddress())).to.be.greaterThan(0n);
+    });
+
+    it("cannot take a plain withdrawal", async () => {
+      await expect(contractBuyer.pull()).to.be.revertedWithCustomError(tollgate, "TransferFailed");
+    });
+
+    it("keeps its balance when the transfer fails", async () => {
+      const owed = await tollgate.balances(await contractBuyer.getAddress());
+      await expect(contractBuyer.pull()).to.be.reverted;
+      expect(await tollgate.balances(await contractBuyer.getAddress())).to.equal(owed);
+    });
+
+    it("can still reach its refund by naming a recipient", async () => {
+      const owed = await tollgate.balances(await contractBuyer.getAddress());
+      await expect(contractBuyer.pullTo(stranger.address)).to.changeEtherBalance(stranger, owed);
+      expect(await tollgate.balances(await contractBuyer.getAddress())).to.equal(0n);
+    });
   });
 
   describe("deployment guards", () => {

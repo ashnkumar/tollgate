@@ -131,7 +131,9 @@ contract Tollgate {
         uint256 refundWei
     );
     event CallRefunded(bytes32 indexed callId, address indexed buyer, uint256 amountWei, string reason);
-    event Withdrawn(address indexed account, uint256 amountWei);
+    /// @param account The account whose balance was drawn down.
+    /// @param recipient Where it was paid; the same as `account` for a plain `withdraw()`.
+    event Withdrawn(address indexed account, address indexed recipient, uint256 amountWei);
 
     // ────────────────────────────────────────── errors ──
 
@@ -339,16 +341,29 @@ contract Tollgate {
 
     /// @notice Withdraw everything owed to `msg.sender`.
     function withdraw() external {
+        withdrawTo(payable(msg.sender));
+    }
+
+    /// @notice Withdraw everything owed to `msg.sender`, paying it to `recipient`.
+    /// @dev Paying only `msg.sender` would strand the balance of any account that cannot
+    ///      receive a plain native transfer. Buyers, providers and the treasury may all be
+    ///      contracts here — a multisig, or anything whose fallback is not payable — and
+    ///      for those the balance would be correctly recorded and permanently
+    ///      unreachable. Naming a recipient costs nothing in trust: the balance still
+    ///      belongs to `msg.sender` and only they can move it.
+    function withdrawTo(address payable recipient) public {
+        if (recipient == address(0)) revert ZeroAddress();
+
         uint256 amount = balances[msg.sender];
         if (amount == 0) revert NothingToWithdraw();
 
         // Checks-effects-interactions: zero the balance before the external call.
         balances[msg.sender] = 0;
 
-        (bool ok,) = msg.sender.call{value: amount}("");
+        (bool ok,) = recipient.call{value: amount}("");
         if (!ok) revert TransferFailed();
 
-        emit Withdrawn(msg.sender, amount);
+        emit Withdrawn(msg.sender, recipient, amount);
     }
 
     // ────────────────────────────────────── internals ──

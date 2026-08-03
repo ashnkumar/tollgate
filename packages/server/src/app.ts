@@ -148,7 +148,7 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
   /**
    * Price one call, before it runs.
    *
-   * Input tokens are counted exactly; output is bounded by the service ceiling. The
+   * Input tokens are counted up front; output is bounded by the service ceiling. The
    * price itself comes from the contract, not from arithmetic here, so the number the
    * buyer is told is the number settlement will check against.
    */
@@ -245,6 +245,34 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
       throw new HttpError(402, `Escrow ${onChainCall.escrowWei} is below quote ${quote.quoteWei}`);
     }
 
+    /**
+     * Check the terms the call was actually funded under before doing any billable work.
+     *
+     * The contract freezes a call's terms at funding, but a quote is issued a moment
+     * earlier. If the provider changed the rate card in between, the buyer can fund a
+     * call whose frozen ceiling or input count is below what this quote was priced
+     * against — and settlement, which is validated against the frozen copy, would then
+     * revert after the model call had already happened and been billed for. Refusing
+     * here costs a re-quote; discovering it at settlement costs the provider a call.
+     */
+    if (onChainCall.quotedInputTokens !== quote.inputTokens) {
+      throw new HttpError(
+        409,
+        `Funded for ${onChainCall.quotedInputTokens} input tokens, quoted ${quote.inputTokens} — take a fresh quote`,
+      );
+    }
+    if (onChainCall.maxOutputTokens !== quote.maxOutputTokens) {
+      throw new HttpError(
+        409,
+        `The output ceiling changed after this quote was issued (${quote.maxOutputTokens} to ${onChainCall.maxOutputTokens}) — take a fresh quote`,
+      );
+    }
+    // Nothing else can settle this call. Running it would mean doing the work and then
+    // being unable to charge for it.
+    if (getAddress(onChainCall.settler) !== getAddress(chain.settlerAddress)) {
+      throw new HttpError(409, "This call is settled by a different server");
+    }
+
     // Only the account that funded the call may redeem its output.
     let signer: string;
     try {
@@ -269,7 +297,9 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
 
     let result;
     try {
-      result = await ai.run(quote.service, quote.input, quote.maxOutputTokens);
+      // The ceiling comes from the funded call, not the quote. They were just checked
+      // to be equal; taking it from the chain keeps the authority in one place.
+      result = await ai.run(quote.service, quote.input, onChainCall.maxOutputTokens);
     } catch (error) {
       const reason = error instanceof ModelRefusedError ? error.message : "service error";
       await chain.failCall(callId, reason);
@@ -286,12 +316,25 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
      * way round: the provider published the rate card, and the buyer's ceiling stays
      * exactly what they agreed to.
      */
-    const billedInputTokens = Math.min(result.inputTokens, quote.inputTokens);
-    const billedOutputTokens = Math.min(result.outputTokens, quote.maxOutputTokens);
+    const billedInputTokens = Math.min(result.inputTokens, onChainCall.quotedInputTokens);
+    const billedOutputTokens = Math.min(result.outputTokens, onChainCall.maxOutputTokens);
 
     const receipt = await chain.settleCall(callId, billedInputTokens, billedOutputTokens);
 
-    const costWei = await costFromRateCard(chain, quote.service.slug, billedInputTokens, billedOutputTokens);
+    /**
+     * Report the cost from the call's frozen terms — the same numbers the contract just
+     * settled against.
+     *
+     * Reading the provider's live rate card here instead would be the same mistake the
+     * contract avoids: a rate change after funding would make these figures disagree
+     * with the balances that actually moved, and a raised rate could even report a
+     * negative refund. It also keeps a fallible extra round trip off the path after the
+     * buyer has been charged, where a failure would lose them the output they paid for.
+     */
+    const costWei =
+      onChainCall.baseFeeWei +
+      BigInt(billedInputTokens) * onChainCall.perInputTokenWei +
+      BigInt(billedOutputTokens) * onChainCall.perOutputTokenWei;
     const refundWei = onChainCall.escrowWei - costWei;
 
     res.json({
@@ -333,17 +376,3 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
   return app;
 }
 
-/**
- * Recompute what settlement charged, from the same on-chain rate card the contract
- * used. Reported back to the caller so they can see the cost without parsing logs.
- */
-async function costFromRateCard(
-  chain: Chain,
-  slug: string,
-  inputTokens: number,
-  outputTokens: number,
-): Promise<bigint> {
-  const s = await chain.getService(serviceId(slug));
-  if (!s) return 0n;
-  return s.baseFeeWei + BigInt(inputTokens) * s.perInputTokenWei + BigInt(outputTokens) * s.perOutputTokenWei;
-}

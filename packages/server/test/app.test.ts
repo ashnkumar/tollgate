@@ -336,6 +336,92 @@ describe("payment guards", () => {
     });
   });
 
+  /**
+   * A funded call carries a frozen copy of the terms it was quoted under. The contract
+   * settles against that copy, so the server has to agree with it — before it does any
+   * billable work, and again when it reports what the call cost.
+   */
+  describe("terms are read from the funded call", () => {
+    /** An app whose model client records whether it was ever asked to do work. */
+    const watchfulApp = () => {
+      const calls: string[] = [];
+      const ai: AiClient = {
+        countInputTokens: async () => 50,
+        run: async (_service, input) => {
+          calls.push(input);
+          return { text: "out", inputTokens: 50, outputTokens: 10 };
+        },
+      };
+      return { app: createApp({ ai, chain, contractAddress: chain.contractAddress }), calls };
+    };
+
+    const quoteOn = async (target: Express) => {
+      const res = await request(target).post("/quote").send({ service: "summarize", input: "x" });
+      expect(res.status).toBe(200);
+      return res.body as { callId: string; inputTokens: number; quoteWei: string; maxOutputTokens: number };
+    };
+
+    it("refuses when the output ceiling moved between quoting and funding", async () => {
+      const { app: watched, calls } = watchfulApp();
+      const q = await quoteOn(watched);
+      // The provider lowers the ceiling. The call freezes the new one, which is below
+      // what this quote was priced against — settlement would revert after the work.
+      chain.addService("summarize", { maxOutputTokens: 100 });
+      await chain.fundCall(q.callId, "summarize", q.inputTokens, BigInt(q.quoteWei));
+
+      const res = await runCall(watched, q.callId);
+
+      expect(res.status).toBe(409);
+      expect(calls).toHaveLength(0);
+      expect(chain.settleCalls).toHaveLength(0);
+    });
+
+    it("refuses a call that a different server is responsible for settling", async () => {
+      const { app: watched, calls } = watchfulApp();
+      const q = await quoteOn(watched);
+      chain.addService("summarize", { settler: "0x000000000000000000000000000000000000bEEF" });
+      await chain.fundCall(q.callId, "summarize", q.inputTokens, BigInt(q.quoteWei));
+
+      const res = await runCall(watched, q.callId);
+
+      expect(res.status).toBe(409);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("refuses when the call was funded for a different input count", async () => {
+      const { app: watched, calls } = watchfulApp();
+      const q = await quoteOn(watched);
+      await chain.fundCall(q.callId, "summarize", q.inputTokens - 1, BigInt(q.quoteWei));
+
+      const res = await runCall(watched, q.callId);
+
+      expect(res.status).toBe(409);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("reports the cost the call was funded under, not the provider's latest rates", async () => {
+      const { app: watched } = watchfulApp();
+      const q = await quoteOn(watched);
+      await chain.fundCall(q.callId, "summarize", q.inputTokens);
+
+      // The provider raises prices a hundredfold while the call is in flight. The
+      // contract settles on the frozen copy, so the report has to as well — reading the
+      // live card here would put the reported figures out of step with the balances
+      // that actually moved, and could even report a negative refund.
+      chain.addService("summarize", { perOutputTokenWei: 500_000_000_000_000n });
+
+      const res = await runCall(watched, q.callId);
+
+      expect(res.status).toBe(200);
+      const { escrowedWei, costWei, refundWei } = res.body.settlement;
+      expect(BigInt(costWei) + BigInt(refundWei)).toBe(BigInt(escrowedWei));
+      expect(BigInt(refundWei)).toBeGreaterThan(0n);
+      expect(BigInt(costWei)).toBe(
+        await chain.balanceOf("0x00000000000000000000000000000000000000A1"),
+      );
+    });
+  });
+
   describe("when the model fails", () => {
     /**
      * Quote and run must go through the same app instance — pending quotes are held

@@ -31,24 +31,65 @@ export class ModelRefusedError extends Error {
   }
 }
 
+/**
+ * Everything that affects the input token count, in one place.
+ *
+ * Both the count and the call are built from this, so the two requests differ only by
+ * `max_tokens` — which does not affect the input side. A field set on one and not the
+ * other would be a silent divergence between the price quoted and the price charged.
+ */
 function buildRequest(service: ServiceDefinition, input: string) {
   return {
     model: service.model,
     system: service.systemPrompt,
     messages: [{ role: "user" as const, content: input }],
+    thinking: { type: "disabled" as const },
   };
 }
+
+/**
+ * Ceiling on one generation.
+ *
+ * Has to stay comfortably inside the settlement headroom in `app.ts`: a call still
+ * running when the buyer becomes able to reclaim leaves the provider doing work that
+ * can no longer be settled.
+ */
+const MODEL_TIMEOUT_MS = 120_000;
 
 export class AnthropicClient implements AiClient {
   private readonly client: Anthropic;
 
   constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+    this.client = new Anthropic({
+      apiKey,
+      /**
+       * No automatic retries, deliberately.
+       *
+       * The SDK retries connection failures and 5xx twice by default. A connection that
+       * drops after the API has already begun work bills for that work, so a retry can
+       * produce a second billable generation for one call the contract charges once —
+       * the same provider-drain shape as running one call id twice, arriving through a
+       * different door. `max_tokens` bounds each attempt, not their sum.
+       *
+       * Failing instead is cheap: a call that produces nothing is refunded in full, so
+       * the buyer is never worse off and the provider pays for one generation at most.
+       */
+      maxRetries: 0,
+      timeout: MODEL_TIMEOUT_MS,
+    });
   }
 
   async countInputTokens(service: ServiceDefinition, input: string): Promise<number> {
-    // Exact, free, and available before the call runs — this is what makes a firm
-    // quote possible rather than a guess.
+    /**
+     * Free, and available before the call runs — this is what makes a firm quote
+     * possible rather than a guess.
+     *
+     * Anthropic documents the result as an estimate rather than a guarantee, so this is
+     * not treated as infallible: settlement bills `min(observed, quoted)`, which leaves
+     * the buyer's ceiling exactly what they agreed to and puts any divergence on the
+     * provider who published the rate card. `test/live-anthropic.test.ts` asserts the
+     * two agree for the payloads this catalogue actually sends.
+     */
     const res = await this.client.messages.countTokens(buildRequest(service, input));
     return res.input_tokens;
   }
@@ -59,7 +100,6 @@ export class AnthropicClient implements AiClient {
       // The API enforces this as a hard ceiling, which is what lets the contract
       // treat `maxOutputTokens * outputRate` as a genuine worst case.
       max_tokens: maxOutputTokens,
-      thinking: { type: "disabled" },
     });
 
     // Safety classifiers can decline a request; that arrives as a normal 200 with an

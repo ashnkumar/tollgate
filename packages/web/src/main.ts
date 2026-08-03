@@ -224,7 +224,7 @@ async function getQuote(): Promise<void> {
 
     const quoteWei = BigInt(quote.quoteWei);
     figures("quote-figures", [
-      ["input counted", `${quote.inputTokens.toLocaleString()} tokens`, "exact, before the call runs"],
+      ["input counted", `${quote.inputTokens.toLocaleString()} tokens`, "before the call runs"],
       ["output ceiling", `${quote.maxOutputTokens.toLocaleString()} tokens`, "enforced as max_tokens"],
       ["worst case", `${formatEth(quoteWei)} ETH`, "what you escrow"],
       ["call id", shortHex(quote.callId, 10, 6), "single use"],

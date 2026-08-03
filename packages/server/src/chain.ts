@@ -35,13 +35,26 @@ export interface OnChainService {
   perOutputTokenWei: bigint;
 }
 
+/**
+ * A funded call, as the contract has it.
+ *
+ * This carries the terms the call was funded under, not the provider's current ones.
+ * Settlement is checked against these, so anything the server decides about a call in
+ * flight — what ceiling to send, what it ended up costing — has to come from here.
+ */
 export interface OnChainCall {
   serviceId: string;
   buyer: string;
   escrowWei: bigint;
   quotedInputTokens: number;
+  maxOutputTokens: number;
   expiresAt: bigint;
   settled: boolean;
+  /** The only account the contract will accept a settlement from. */
+  settler: string;
+  baseFeeWei: bigint;
+  perInputTokenWei: bigint;
+  perOutputTokenWei: bigint;
   /** True when nobody has opened this call yet. */
   missing: boolean;
 }
@@ -100,17 +113,41 @@ interface TollgateMethods {
 export class TollgateChain implements Chain {
   private readonly contract: Contract & TollgateMethods;
   private readonly settler: Wallet;
+  private readonly nonces: NonceManager;
+  /** Tail of the transaction queue; see `serialize`. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(rpcUrl: string, address: string, settlerPrivateKey: string) {
     const provider = new JsonRpcProvider(rpcUrl);
     this.settler = new Wallet(settlerPrivateKey, provider);
-    // Settlements are independent transactions from one key, so concurrent calls can
-    // otherwise collide on a stale nonce. NonceManager serialises them.
-    this.contract = new Contract(
-      address,
-      TOLLGATE_ABI,
-      new NonceManager(this.settler),
-    ) as Contract & TollgateMethods;
+    // A node can still be serving a cached transaction count right after one of our own
+    // transactions mines, so the nonce is tracked locally rather than re-read.
+    this.nonces = new NonceManager(this.settler);
+    this.contract = new Contract(address, TOLLGATE_ABI, this.nonces) as Contract &
+      TollgateMethods;
+  }
+
+  /**
+   * Run state-changing transactions one at a time.
+   *
+   * `NonceManager` advances its local nonce before the transaction is populated or
+   * broadcast and never rolls it back — ethers carries a standing `@TODO` about exactly
+   * this. So a failure during gas estimation, which is what a revert looks like, leaves
+   * a nonce nothing will ever occupy, and every later transaction from this key is
+   * submitted above the gap and cannot mine. One reverting settlement would otherwise
+   * take out the server's ability to settle or refund anything else, permanently.
+   *
+   * Recovering means calling `reset()`, and that is only safe when nothing else from
+   * this key is in flight — hence the queue. Settlement is a short transaction on a
+   * single key; serialising it costs little and removes a whole class of stuck state.
+   */
+  private serialize<T>(job: () => Promise<T>): Promise<T> {
+    const started = this.queue.then(job, job);
+    this.queue = started.then(
+      () => undefined,
+      () => undefined,
+    );
+    return started;
   }
 
   get settlerAddress(): string {
@@ -147,8 +184,13 @@ export class TollgateChain implements Chain {
       buyer: c.buyer,
       escrowWei: c.escrowWei,
       quotedInputTokens: Number(c.quotedInputTokens),
+      maxOutputTokens: Number(c.maxOutputTokens),
       expiresAt: c.expiresAt,
       settled: c.settled,
+      settler: c.settler,
+      baseFeeWei: c.baseFeeWei,
+      perInputTokenWei: c.perInputTokenWei,
+      perOutputTokenWei: c.perOutputTokenWei,
       missing: c.buyer === "0x0000000000000000000000000000000000000000",
     };
   }
@@ -165,10 +207,12 @@ export class TollgateChain implements Chain {
    * three quick round trips and then surfaces the real error.
    */
   async settleCall(callId: string, inputTokens: number, outputTokens: number): Promise<TransactionReceipt> {
-    return this.withRetry(`settleCall ${callId}`, async () => {
-      const tx = await this.contract.settleCall(callId, inputTokens, outputTokens);
-      return tx.wait();
-    });
+    return this.serialize(() =>
+      this.withRetry(`settleCall ${callId}`, async () => {
+        const tx = await this.contract.settleCall(callId, inputTokens, outputTokens);
+        return tx.wait();
+      }),
+    );
   }
 
   private async withRetry(
@@ -184,6 +228,9 @@ export class TollgateChain implements Chain {
         return receipt;
       } catch (error) {
         lastError = error;
+        // Whatever went wrong, the local nonce may have moved for a transaction that
+        // was never broadcast. Drop it and re-read from the chain before trying again.
+        this.nonces.reset();
         if (attempt < attempts) {
           console.warn(`${label} failed (attempt ${attempt}/${attempts}), retrying:`, error);
           await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
@@ -196,10 +243,17 @@ export class TollgateChain implements Chain {
   }
 
   async failCall(callId: string, reason: string): Promise<TransactionReceipt> {
-    const tx = await this.contract.failCall(callId, reason.slice(0, 200));
-    const receipt = await tx.wait();
-    if (!receipt) throw new Error(`failCall ${callId} produced no receipt`);
-    return receipt;
+    return this.serialize(async () => {
+      try {
+        const tx = await this.contract.failCall(callId, reason.slice(0, 200));
+        const receipt = await tx.wait();
+        if (!receipt) throw new Error(`failCall ${callId} produced no receipt`);
+        return receipt;
+      } catch (error) {
+        this.nonces.reset();
+        throw error;
+      }
+    });
   }
 
   async balanceOf(account: string): Promise<bigint> {

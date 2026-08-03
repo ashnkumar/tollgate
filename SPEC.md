@@ -17,23 +17,42 @@ Three ways out:
 |---|---|---|---|
 | Fixed price per call | total | provider eats all variance | inputs vary in size at all |
 | Price bands by input size | approximate | provider eats output variance | output is the dominant cost, which it is |
-| **Quote a bound, settle actual** | **bounded, exact** | **none** | needs a settlement step |
+| **Quote a bound, settle actual** | **bounded** | **estimation only** | needs a settlement step |
 
 Tollgate takes the third. It works because of two properties of the Anthropic API, both
 verified in `packages/server/test/live-anthropic.test.ts` rather than assumed:
 
-1. **`count_tokens` gives an exact input count before the call**, for free.
+1. **`count_tokens` gives an input count before the call**, for free.
 2. **`max_tokens` is a hard ceiling, not a hint** — the API stops generation there.
 
 Together those make the worst-case cost of a call *computable in advance*:
 
 ```
 worst case = baseFee + (inputTokens x inputRate) + (maxOutputTokens x outputRate)
-                       ^ exact, counted            ^ exact, enforced
+                       ^ counted up front         ^ enforced by the API
 ```
 
-That is a bound, not an estimate. The buyer escrows it; the call runs; settlement
-charges what was actually used and returns the rest.
+The buyer escrows that; the call runs; settlement charges what was actually used and
+returns the rest.
+
+### Who carries the estimation risk
+
+The second property is a guarantee — `max_tokens` is enforced, and the live test asserts
+it. The first is weaker than it looks: Anthropic documents `count_tokens` as an
+[estimate](https://platform.claude.com/docs/en/build-with-claude/token-counting), not a
+promise, so a quote built on it is only as firm as that count.
+
+The design puts that risk on the side that chose to take it. Settlement bills
+`min(observed, quoted)`, so:
+
+- The **buyer** is unaffected either way. They are charged no more than the count they
+  were quoted, and never more than the escrow, which the contract enforces.
+- The **provider** absorbs any undercount. They published the rate card and they run the
+  metering, so an estimate that came in low is their exposure, not their customer's.
+
+Both requests are built from the same helper in `ai.ts`, differing only by `max_tokens`,
+so nothing that affects the input count can be set on one and not the other. That makes
+divergence unlikely; it is the `min` that makes it harmless.
 
 ---
 
@@ -64,7 +83,7 @@ charges what was actually used and returns the rest.
 
 | Number | Source | Why there |
 |---|---|---|
-| input tokens | `count_tokens`, before the call | exact and free; an estimate would make the quote a guess |
+| input tokens | `count_tokens`, before the call | free, and available before anything is spent; the provider carries any divergence |
 | output ceiling | on-chain rate card | the contract prices against it, so it must be the same number the API enforces |
 | price | `Tollgate.quote()` | if the server did its own arithmetic it could disagree with settlement |
 | actual output | `usage.output_tokens` | the only authority on what was really used |
