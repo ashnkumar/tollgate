@@ -1,6 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import request from "supertest";
-import { Wallet } from "ethers";
+import { getAddress, Wallet } from "ethers";
 import type { Express } from "express";
 import { createApp, redemptionMessage } from "../src/app.js";
 import { FakeAiClient, ModelRefusedError, type AiClient } from "../src/ai.js";
@@ -190,6 +193,20 @@ describe("payment guards", () => {
         .post("/run")
         .send({ callId: a.callId, signature: await sign(b.callId) });
       expect(res.status).toBe(403);
+    });
+
+    /**
+     * Pinned deliberately. `packages/web` builds this same string independently so the
+     * browser client can sign without asking the server what to sign — a server that
+     * dictates the message is a server a buyer cannot check. A matching test lives
+     * there; editing either side alone fails one of them.
+     */
+    it("signs an exact, pinned message", () => {
+      expect(
+        redemptionMessage("0xabc123", "0x5fbdb2315678afecb367f032d93f642f64180aa3"),
+      ).toBe(
+        "Tollgate: redeem call\ncall: 0xabc123\ncontract: 0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      );
     });
 
     it("rejects a malformed signature", async () => {
@@ -396,6 +413,60 @@ describe("payment guards", () => {
       const translate = res.body.services.find((s: { slug: string }) => s.slug === "translate");
       expect(translate.registered).toBe(false);
       expect(translate.rateCard).toBeNull();
+    });
+
+    it("publishes the contract address a buyer needs to escrow and sign", async () => {
+      const res = await request(app).get("/health");
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.contract).toBe(getAddress(chain.contractAddress));
+      expect(res.body.settler).toBe(chain.settlerAddress);
+    });
+  });
+
+  describe("serving the browser client", () => {
+    let webRoot: string;
+
+    beforeAll(() => {
+      webRoot = mkdtempSync(join(tmpdir(), "tollgate-web-"));
+      writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>t</title>");
+      // Deliberately named after an endpoint.
+      writeFileSync(join(webRoot, "services"), "not the catalogue");
+    });
+
+    afterAll(() => {
+      rmSync(webRoot, { recursive: true, force: true });
+    });
+
+    it("does not serve static files unless a build was handed to it", async () => {
+      const res = await request(app).get("/index.html");
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: "Not found" });
+    });
+
+    it("serves the build when there is one", async () => {
+      const withWeb = createApp({
+        ai: new FakeAiClient(),
+        chain,
+        contractAddress: chain.contractAddress,
+        webRoot,
+      });
+      const res = await request(withWeb).get("/");
+      expect(res.status).toBe(200);
+      expect(res.text).toContain("<!doctype html>");
+    });
+
+    it("keeps the API in front of the static files", async () => {
+      // A file in the bundle must not be able to shadow an endpoint that shares its name.
+      const withWeb = createApp({
+        ai: new FakeAiClient(),
+        chain,
+        contractAddress: chain.contractAddress,
+        webRoot,
+      });
+      const res = await request(withWeb).get("/services");
+      expect(res.status).toBe(200);
+      expect(res.body.services).toBeInstanceOf(Array);
     });
   });
 });

@@ -33,35 +33,63 @@ computed on-chain from a rate card the provider published.
 
 ## Quickstart
 
-Requires Node 20+ and pnpm. No chain account, no faucet, no card.
+Requires Node 20+ and pnpm. No chain account, no faucet, no card, no wallet extension.
 
 ```bash
 pnpm install
-./scripts/smoke.sh          # chain + deploy + server + one metered call, then cleans up
+./scripts/walkthrough.sh    # chain + deploy + server, then opens the browser walkthrough
 ```
 
-That runs the whole thing against a deterministic fake model, so it needs no API key.
-To watch it with a real model:
+That brings up a local chain, deploys the contract, starts the server, and opens a page
+that walks one call through all six steps. Ctrl-C stops everything it started.
+
+It runs against a deterministic fake model by default, so it needs no API key. For real
+calls:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-USE_FAKE_MODEL=false ./scripts/smoke.sh
+USE_FAKE_MODEL=false ./scripts/walkthrough.sh
 ```
 
-### Running it interactively
+Prefer a terminal? `./scripts/smoke.sh` does the same round trip with no browser, and
+asserts the result — it is what CI runs.
 
-Four terminals, if you want to poke at it:
+### The browser walkthrough
+
+The page is the argument, made clickable: pick a service, watch the quote get priced
+*before* anything runs, escrow it, and see how much comes back.
+
+Two things on it are worth more than the rest:
+
+- **"Priced independently from the contract."** After the server returns a quote, the
+  page calls `quote()` on-chain itself and compares. If they disagree it refuses to
+  escrow. The rate card lives on-chain precisely so a buyer never has to trust the
+  seller's arithmetic, and the page demonstrates that rather than asserting it.
+- **The settlement bar.** One bar, escrow-width, split into what was charged and what
+  came back. Different services move it a long way — `translate` on a short input gives
+  most of the escrow back; `explain-code` on a real function gives back very little.
+
+The buyer's key is held in the page and never reaches the server. Both things that have
+to come from a buyer — the escrow transaction and the redemption signature — are made
+there. It is a Hardhat development key, worthless off a local chain; a real buyer would
+hold their own, and nothing else about the flow would change.
+
+### Running it by hand
+
+Four terminals, if you want to poke at the pieces:
 
 ```bash
 pnpm chain                  # 1. local chain, 20 funded accounts, ~12s
 pnpm deploy:local           # 2. deploy + list the catalogue (writes deployment.json)
-pnpm serve                  # 3. the metering server
-pnpm demo summarize         # 4. one call, end to end
+pnpm web && pnpm serve      # 3. build the page, start the metering server
+pnpm demo summarize         # 4. one call, end to end, in the terminal
 ```
 
 `pnpm serve` reads `deployment.json` and the local dev key automatically — nothing to
 copy between terminals. Set `ANTHROPIC_API_KEY` before step 3 for real calls, or
 `USE_FAKE_MODEL=true` for fake ones. Try `pnpm demo explain-code` or `pnpm demo translate`.
+
+The server runs fine without `pnpm web`; it just serves the API alone.
 
 ---
 
@@ -101,7 +129,9 @@ is the entire argument for settling against usage instead of charging the ceilin
 ```
 packages/contracts   Tollgate.sol — rate cards, escrow, settlement, withdrawals
 packages/server      /quote, /run — counts tokens, verifies escrow, settles
-packages/demo        end-to-end walkthrough
+packages/web         the browser walkthrough; buyer's key stays in the page
+packages/demo        the same walkthrough in a terminal
+scripts/walkthrough.sh  brings the stack up and opens the page
 scripts/smoke.sh     full stack against a real chain; what CI runs
 ```
 
@@ -147,7 +177,7 @@ Nothing here is specific to a particular chain. It is plain EVM; point `RPC_URL`
 ## Tests
 
 ```bash
-pnpm test                   # 39 contract tests + 27 server tests, all offline
+pnpm test                   # 39 contract + 32 server + 14 web tests, all offline
 ./scripts/smoke.sh          # the whole stack against a real chain
 RUN_LIVE_TESTS=1 pnpm test  # adds 4 tests against the real Anthropic API
 ```
@@ -156,6 +186,10 @@ The live tests are worth calling out: they assert the two API properties the pri
 model depends on — that a token count taken before a call matches what the call reports,
 and that `max_tokens` is a hard ceiling rather than a hint. The whole design collapses if
 either is false, so they are asserted rather than assumed.
+
+`smoke.sh` also runs the browser client's own modules against the live stack, so the
+page's chain logic — pricing the call independently, escrowing, signing, withdrawing —
+is covered rather than only its arithmetic.
 
 ---
 
@@ -181,6 +215,10 @@ honest one.
   retried, but if the transaction ultimately does not land the call stays open until the
   buyer reclaims and the provider is out of pocket. A production deployment would persist
   unsettled calls and retry them out of band rather than only within the request.
+- **The browser walkthrough is a local-chain demo.** It holds a published Hardhat
+  development key so the quickstart needs no wallet extension. Pointing it at anything
+  other than a local node would mean asking a real wallet for the two signatures — a
+  change to `packages/web/src/wallet.ts` and nothing else, but it has not been done.
 - **The contract has not been audited.** It is a reference implementation. The tests are
   thorough about the paths they cover; that is not the same thing.
 - **`CALL_TIMEOUT` is a fixed hour.** Long enough for any call here, but it is a constant

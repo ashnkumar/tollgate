@@ -16,7 +16,9 @@
     "deploy:local": "pnpm --filter @tollgate/contracts deploy:local",
     "serve": "pnpm --filter @tollgate/server start",
     "demo": "pnpm --filter @tollgate/demo start",
-    "smoke": "./scripts/smoke.sh"
+    "web": "pnpm --filter @tollgate/web build",
+    "smoke": "./scripts/smoke.sh",
+    "walkthrough": "./scripts/walkthrough.sh"
   },
   "devDependencies": {
     "typescript": "^5.6.3"

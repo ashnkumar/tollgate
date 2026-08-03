@@ -22,6 +22,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The contract tests import typings hardhat generates, so `pnpm lint` compiles the
+      # contracts on the way through. It is incremental, and this is a fresh checkout.
       - name: Typecheck
         run: pnpm lint
 

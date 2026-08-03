@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { HDNodeWallet, Mnemonic } from "ethers";
 
@@ -15,6 +15,8 @@ export interface Config {
   useFakeModel: boolean;
   /** True when the contract address or settler key came from local dev defaults. */
   usingLocalDefaults: boolean;
+  /** Built browser client, served at `/` when it exists. Undefined until `pnpm web`. */
+  webRoot: string | undefined;
 }
 
 /**
@@ -40,21 +42,40 @@ function devSettlerKey(): string {
  * copy a contract address between terminals — the step the reference implementation
  * got wrong by prompting for it interactively.
  *
- * Searched upward from the working directory, because `pnpm --filter` runs scripts
- * with the cwd set to the package rather than the repo root.
+ * Located by walking upward from the working directory, because `pnpm --filter` runs
+ * scripts with the cwd set to the package rather than the repo root.
  */
 function readDeployment(): { address?: string } | undefined {
+  const path = findUpwards("deployment.json");
+  if (!path) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as { address?: string };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Walk up from the working directory looking for `relativePath`. */
+function findUpwards(relativePath: string): string | undefined {
   let dir = process.cwd();
   for (let depth = 0; depth < 5; depth += 1) {
-    try {
-      return JSON.parse(readFileSync(resolve(dir, "deployment.json"), "utf8")) as { address?: string };
-    } catch {
-      const parent = dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
+    const candidate = resolve(dir, relativePath);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
   return undefined;
+}
+
+/**
+ * The built browser client, served at `/` when it is there. Optional on purpose: the
+ * server is useful without it, and making an API refuse to start without a bundling
+ * step would be the wrong trade.
+ */
+function findWebRoot(): string | undefined {
+  const index = findUpwards("packages/web/dist/index.html");
+  return index ? dirname(index) : undefined;
 }
 
 export function loadConfig(): Config {
@@ -81,5 +102,6 @@ export function loadConfig(): Config {
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     useFakeModel: process.env.USE_FAKE_MODEL === "true",
     usingLocalDefaults: !process.env.TOLLGATE_ADDRESS || !explicitKey,
+    webRoot: findWebRoot(),
   };
 }

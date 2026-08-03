@@ -26,6 +26,11 @@ export interface AppDeps {
   contractAddress: string;
   /** Quote-store bounds. Overridable so tests can exercise them cheaply. */
   limits?: { maxPendingQuotes?: number; quoteTtlMs?: number };
+  /**
+   * Directory of the built browser client, served as static files at `/`. Omitted when
+   * it has not been built, and by the tests, which exercise the API alone.
+   */
+  webRoot?: string;
 }
 
 /**
@@ -75,7 +80,7 @@ class HttpError extends Error {
   }
 }
 
-export function createApp({ ai, chain, contractAddress, limits }: AppDeps): Express {
+export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDeps): Express {
   const maxPendingQuotes = limits?.maxPendingQuotes ?? MAX_PENDING_QUOTES;
   const quoteTtlMs = limits?.quoteTtlMs ?? QUOTE_TTL_MS;
   const app = express();
@@ -102,8 +107,13 @@ export function createApp({ ai, chain, contractAddress, limits }: AppDeps): Expr
     }
   };
 
+  /**
+   * The contract address is published here because the browser client needs it and it
+   * is not a secret — it is the address every buyer sends escrow to, and the address
+   * bound into the message they sign.
+   */
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, settler: chain.settlerAddress });
+    res.json({ ok: true, settler: chain.settlerAddress, contract: getAddress(contractAddress) });
   });
 
   /** The catalogue, joined with each service's on-chain rate card. */
@@ -302,6 +312,10 @@ export function createApp({ ai, chain, contractAddress, limits }: AppDeps): Expr
       },
     });
   }
+
+  // Mounted after the API so a stray file in the bundle can never shadow a route, and
+  // before the catch-all so a missing asset still 404s as JSON like everything else.
+  if (webRoot) app.use(express.static(webRoot));
 
   app.use((_req, res) => {
     res.status(404).json({ error: "Not found" });

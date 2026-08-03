@@ -6,7 +6,7 @@
   "scripts": {
     "build": "hardhat compile",
     "test": "hardhat test",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "lint": "hardhat compile && tsc -p tsconfig.json --noEmit",
     "chain": "hardhat node",
     "deploy:local": "hardhat run scripts/deploy.ts --network localhost"
   },

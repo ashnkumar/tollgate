@@ -56,6 +56,9 @@ fi
 echo "→ building"
 pnpm --filter @tollgate/contracts build >"$LOG_DIR/build.log" 2>&1 || fail "contract build failed"
 pnpm --filter @tollgate/server build >>"$LOG_DIR/build.log" 2>&1 || fail "server build failed"
+# Built before the server starts, because the server only serves the client if it is
+# there when it boots.
+pnpm --filter @tollgate/web build >>"$LOG_DIR/build.log" 2>&1 || fail "web build failed"
 
 echo "→ starting chain on :$RPC_PORT"
 pnpm --filter @tollgate/contracts exec hardhat node --port "$RPC_PORT" >"$LOG_DIR/chain.log" 2>&1 &
@@ -75,6 +78,9 @@ PORT="$SERVER_PORT" RPC_URL="http://127.0.0.1:$RPC_PORT" USE_FAKE_MODEL="$USE_FA
   node packages/server/dist/index.js >"$LOG_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 wait_for "server" "curl -sf http://127.0.0.1:$SERVER_PORT/health"
+
+curl -sf "http://127.0.0.1:$SERVER_PORT/" | grep -q "Tollgate" \
+  || fail "the browser walkthrough is not being served"
 
 echo "→ running a metered call"
 OUT="$LOG_DIR/demo.log"
@@ -98,6 +104,13 @@ assert paid < escrowed, f"paid {paid} should be below escrow {escrowed}"
 assert abs((paid + refunded) - escrowed) < 1e-12, "paid + refunded should equal escrowed"
 assert refunded > 0, "expected a refund"
 PY
+
+# The browser client runs the same flow from its own modules: it prices the call
+# against the chain itself, escrows, signs, and pulls the refund back.
+echo "→ checking the browser client"
+SERVER_URL="http://127.0.0.1:$SERVER_PORT" RPC_URL="http://127.0.0.1:$RPC_PORT" \
+  pnpm --filter @tollgate/web exec tsx scripts/live-check.mts \
+  || fail "the browser client failed its end-to-end check"
 
 echo
 sed -n '/5. Settlement/,/settled in/p' "$OUT"
