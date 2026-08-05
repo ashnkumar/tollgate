@@ -45,11 +45,11 @@ No subscription, no account, no API key on the buyer's side — only a key they 
 
 | | Buying an AI call the usual way | With Tollgate |
 |---|---|---|
-| **Before you commit** | A rate card and an estimate. The real number arrives on the invoice | `quote()` returns the worst case in wei, computed on-chain from the published rates and your exact input size |
+| **Before you commit** | A rate card and an estimate. The real number arrives on the invoice | A worst case in wei, computed from published rates and your exact input, that you can check yourself |
 | **A short answer** | You pay the flat price whatever the call produced | Settlement charges the tokens actually used and the difference comes back |
 | **The bill** | The seller tells you what you owe | The seller reports two token counts. The contract does the arithmetic, and reverts if the result exceeds what you escrowed |
 | **Mid-call price changes** | Whatever the seller's current rate card says | The call carries its own frozen copy of the terms it was funded under |
-| **The seller vanishes** | You chase a refund | `reclaimCall()` returns the whole escrow after the timeout, and no one can stop it |
+| **The seller vanishes** | You chase a refund | The whole escrow comes back after a timeout, and nobody can stop it |
 
 The obvious alternative is a flat price per call, which is what most AI marketplaces do and what
 this repository's predecessor did. It is simpler, it needs no settlement transaction, and when
