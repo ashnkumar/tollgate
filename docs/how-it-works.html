@@ -1,0 +1,227 @@
+<!doctype html>
+<meta charset="utf-8">
+<!--
+  Source for how-it-works.png. Render with:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless=new --disable-gpu --hide-scrollbars --no-first-run \
+      --user-data-dir=/tmp/tollgate-render --virtual-time-budget=3000 \
+      --force-device-scale-factor=2 --window-size=1560,700 \
+      --screenshot=docs/how-it-works.png "file://$PWD/docs/how-it-works.html"
+
+  Every figure here is from one real run of `pnpm demo summarize` against the Anthropic
+  API. Both arithmetic sums are the contract's own `_cost`, and they are checkable on
+  the page.
+-->
+<style>
+  :root {
+    --ink: #23201c;
+    --muted: #6f6a63;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1560px; height: 700px;
+    font-family: var(--sans);
+    color: var(--ink);
+    background: #fff;
+    padding: 32px 38px 24px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .eyebrow {
+    text-align: center;
+    font-size: 12.5px; font-weight: 700; letter-spacing: .17em;
+    color: #8a837a; text-transform: uppercase; margin-bottom: 18px;
+  }
+  .panels { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; height: 610px; }
+  .panel { border-radius: 16px; padding: 17px 17px 13px; display: flex; flex-direction: column; }
+  .p1 { background: #fbf4e6; border: 1px solid #e8d4ab; }
+  .p2 { background: #eef2f8; border: 1px solid #c3cfe1; }
+  .p3 { background: #e7f2ea; border: 1px solid #b4d5c0; }
+
+  .phead { display: flex; align-items: center; gap: 9px; margin-bottom: 13px; }
+  .num {
+    width: 21px; height: 21px; border-radius: 50%; flex: none;
+    display: grid; place-items: center;
+    font-size: 12px; font-weight: 700; background: #fff;
+  }
+  .p1 .num { color: #96700d; border: 1.5px solid #dcc079; }
+  .p2 .num { color: #3f5a85; border: 1.5px solid #9db2d1; }
+  .p3 .num { color: #2f7048; border: 1.5px solid #92c2a4; }
+  .ptitle { font-size: 17.5px; font-weight: 700; letter-spacing: -.015em; }
+  .p1 .ptitle { color: #7e5d09; } .p2 .ptitle { color: #33507c; } .p3 .ptitle { color: #26623e; }
+
+  .card {
+    background: #fff; border: 1px solid #e9e7e3; border-radius: 11px;
+    padding: 12px 13px; box-shadow: 0 1px 2px rgba(30,25,16,.05);
+  }
+  .card + .card { margin-top: 10px; }
+  .clabel {
+    font-size: 10px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase;
+    color: #9d968c; margin-bottom: 9px;
+  }
+  .foot { margin-top: auto; padding-top: 12px; font-size: 12.5px; line-height: 1.45; text-align: center; }
+  .p1 .foot { color: #8a6a1c; } .p2 .foot { color: #4a5f80; } .p3 .foot { color: #3f7355; }
+  code, .m { font-family: var(--mono); }
+
+  /* rate card rows */
+  .rate { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.6px; }
+  .rate + .rate { margin-top: 7px; padding-top: 7px; border-top: 1px solid #f2f0ec; }
+  .rk { color: #56514a; }
+  .rv { font-family: var(--mono); font-size: 12.2px; font-weight: 600; }
+
+  /* the arithmetic block */
+  .sum {
+    margin-top: 10px; background: #fdf9f0; border: 1px dashed #ddc384; border-radius: 9px;
+    padding: 11px 12px; font-family: var(--mono); font-size: 11.6px; line-height: 1.75; color: #7a5e13;
+  }
+  .sum.green { background: #f2f9f4; border-color: #a8ceb6; color: #2f6444; }
+  .sum b { font-weight: 700; }
+  .tot { display: block; margin-top: 5px; padding-top: 6px; border-top: 1px solid #e4d3a4; font-size: 13px; }
+  .sum.green .tot { border-top-color: #bcdcc7; }
+
+  .note {
+    margin-top: 10px; border-radius: 9px; padding: 10px 12px;
+    font-size: 11.9px; line-height: 1.5;
+  }
+  .n1 { background: #fdf8ec; border: 1px dashed #dfc98e; color: #7c6015; }
+  .n2 { background: #f2f5fa; border: 1px dashed #b2c2da; color: #3e5578; }
+  .n3 { background: #f1f8f3; border: 1px dashed #a9cfb7; color: #2e6444; }
+
+  /* signed message */
+  .sig {
+    font-family: var(--mono); font-size: 10.9px; line-height: 1.6; color: #46536b;
+    background: #f7f9fc; border: 1px solid #dde4ef; border-radius: 8px; padding: 9px 10px;
+  }
+  .who {
+    display: inline-block; font-family: var(--mono); font-size: 9.8px; font-weight: 700;
+    letter-spacing: .05em; border-radius: 4px; padding: 2px 7px; margin-bottom: 7px;
+  }
+  .who.buyer { background: #dde7f6; color: #33507c; }
+  .who.settler { background: #e2f0e6; color: #2b6440; }
+
+  /* step rows */
+  .step { display: grid; grid-template-columns: 13px 1fr; gap: 9px; align-items: start; font-size: 12.2px; line-height: 1.42; }
+  .step + .step { margin-top: 8px; }
+  .tick { font-weight: 700; }
+  .p2 .tick { color: #4a72ad; } .p3 .tick { color: #35835a; }
+
+  /* settlement bar */
+  .bar { display: flex; height: 22px; border-radius: 6px; overflow: hidden; margin-top: 4px; }
+  .bp { background: #4a6a96; }
+  .br { background: #2f8a52; }
+  .blegend { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; margin-top: 7px; }
+  .blegend .lp { color: #4a6a96; } .blegend .lr { color: #2f8a52; font-weight: 700; }
+</style>
+
+<div class="eyebrow">One call through Tollgate</div>
+
+<div class="panels">
+
+  <!-- ================= 1 ================= -->
+  <div class="panel p1">
+    <div class="phead"><div class="num">1</div><div class="ptitle">Price it before it runs</div></div>
+
+    <div class="card">
+      <div class="clabel">Rate card &nbsp;·&nbsp; published on-chain by the provider</div>
+      <div class="rate"><span class="rk">base fee</span><span class="rv">0.001 ETH</span></div>
+      <div class="rate"><span class="rk">per input token</span><span class="rv">0.000001 ETH</span></div>
+      <div class="rate"><span class="rk">per output token</span><span class="rv">0.000005 ETH</span></div>
+      <div class="rate"><span class="rk">output ceiling</span><span class="rv">400 tokens</span></div>
+    </div>
+
+    <div class="card">
+      <div class="clabel">This call</div>
+      <div class="rate"><span class="rk">input, counted up front</span><span class="rv">254 tokens</span></div>
+      <div class="rate"><span class="rk">output, bounded by the cap</span><span class="rv">≤ 400 tokens</span></div>
+
+      <div class="sum">
+        0.001<br>
+        + 254 &times; 0.000001<br>
+        + 400 &times; 0.000005
+        <b class="tot">= 0.003254 ETH &nbsp; worst case</b>
+      </div>
+    </div>
+
+    <div class="note n1">
+      <b>Nobody is trusted for this number.</b> <span class="m">quote()</span> is a public view
+      function on the contract, so the buyer recomputes it themselves — the browser page does, and
+      refuses to escrow if the two disagree.
+    </div>
+
+    <div class="foot">Counting input is free and happens<br>before anything billable runs.</div>
+  </div>
+
+  <!-- ================= 2 ================= -->
+  <div class="panel p2">
+    <div class="phead"><div class="num">2</div><div class="ptitle">Escrow it, then run</div></div>
+
+    <div class="card">
+      <div class="who buyer">BUYER SIGNS</div>
+      <div class="rate"><span class="rk"><span class="m">openCall(callId, serviceId, 254)</span></span><span class="rv">0.003254</span></div>
+      <div class="note n2" style="margin-top:9px">
+        The call takes its <b>own copy</b> of the rates, the ceiling, the provider and the settler.
+        Nothing the provider changes afterwards can reach a call already funded.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="who buyer">BUYER SIGNS</div>
+      <div class="sig">Tollgate: redeem call<br>call: 0x476e970d…d1f67e<br>contract: 0x5FbDB2…180aa3</div>
+      <div class="note n2" style="margin-top:9px">
+        A call id travels over HTTP, so it is not authorisation on its own. Output goes only to the
+        account that funded the call.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="clabel">Before spending a token, the server checks</div>
+      <div class="step"><div class="tick">→</div><div>the escrow covers the quote</div></div>
+      <div class="step"><div class="tick">→</div><div>the frozen input count and ceiling still match</div></div>
+      <div class="step"><div class="tick">→</div><div>this server is the call's settler</div></div>
+      <div class="step"><div class="tick">→</div><div>there is time left to settle before expiry</div></div>
+    </div>
+
+    <div class="foot">Then one call, <span class="m">max_tokens = 400</span> —<br>the same ceiling the buyer paid for.</div>
+  </div>
+
+  <!-- ================= 3 ================= -->
+  <div class="panel p3">
+    <div class="phead"><div class="num">3</div><div class="ptitle">Settle against what was used</div></div>
+
+    <div class="card">
+      <div class="who settler">SETTLER SUBMITS</div>
+      <div class="sig" style="background:#f4faf6;border-color:#cfe4d6;color:#2f6444">settleCall(callId, <b>254</b>, <b>185</b>)</div>
+      <div class="note n3" style="margin-top:9px">
+        Two token counts. <b>No price.</b> The settler has no way to name one.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="clabel">The contract does the arithmetic</div>
+      <div class="sum green">
+        0.001<br>
+        + 254 &times; 0.000001<br>
+        + 185 &times; 0.000005
+        <b class="tot">= 0.002179 ETH &nbsp; charged</b>
+      </div>
+      <div class="step" style="margin-top:9px"><div class="tick">✓</div><div>reverts outright if this exceeds the escrow</div></div>
+    </div>
+
+    <div class="card">
+      <div class="clabel">Escrowed 0.003254 ETH</div>
+      <div class="bar">
+        <div class="bp" style="width:66.96%"></div>
+        <div class="br" style="width:33.04%"></div>
+      </div>
+      <div class="blegend">
+        <span class="lp">charged 0.002179</span>
+        <span class="lr">refunded 0.001075</span>
+      </div>
+    </div>
+
+    <div class="foot"><b>Refunds and earnings are pulled, not pushed.</b><br>They accrue to a balance you withdraw.</div>
+  </div>
+
+</div>

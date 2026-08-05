@@ -1,0 +1,225 @@
+<!doctype html>
+<meta charset="utf-8">
+<!--
+  Source for architecture.png. Render with:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless=new --disable-gpu --hide-scrollbars --no-first-run \
+      --user-data-dir=/tmp/tollgate-render --virtual-time-budget=3000 \
+      --force-device-scale-factor=2 --window-size=1560,800 \
+      --screenshot=docs/architecture.png "file://$PWD/docs/architecture.html"
+
+  Every module path, endpoint and function name here is read out of the repository.
+  The numbers key to the component table in README.md.
+-->
+<style>
+  :root {
+    --ink: #23201c;
+    --muted: #6f6a63;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 1560px; height: 800px;
+    font-family: var(--sans); color: var(--ink); background: #fff;
+    padding: 26px 38px 20px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .eyebrow {
+    text-align: center; font-size: 12.5px; font-weight: 700; letter-spacing: .17em;
+    color: #8a837a; text-transform: uppercase; margin-bottom: 16px;
+  }
+
+  .layer { border-radius: 14px; padding: 13px 15px 14px; position: relative; }
+  .layer + .layer { margin-top: 13px; }
+  .l-buyer  { background: #eef2f8; border: 1px solid #c3cfe1; }
+  .l-server { background: #fbf4e6; border: 1px solid #e8d4ab; }
+  .l-ext    { background: #f5f3f0; border: 1px solid #ddd8d1; }
+  .l-chain  { background: #e7f2ea; border: 1px solid #b4d5c0; }
+
+  .lhead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 11px; }
+  .ltitle { font-size: 15.5px; font-weight: 700; letter-spacing: -.01em; }
+  .l-buyer .ltitle { color: #33507c; }
+  .l-server .ltitle { color: #7e5d09; }
+  .l-ext .ltitle { color: #55504a; }
+  .l-chain .ltitle { color: #26623e; }
+  .lsub { font-size: 12.2px; color: #7d776f; }
+
+  .keytag {
+    margin-left: auto; font-family: var(--mono); font-size: 10.2px; font-weight: 700;
+    letter-spacing: .04em; border-radius: 5px; padding: 3px 9px;
+  }
+  .keytag.buyer { background: #dde7f6; color: #33507c; }
+  .keytag.settler { background: #f6e9cb; color: #7e5d09; }
+  .keytag.none { background: #eceae6; color: #6f6a63; }
+
+  .row { display: grid; gap: 11px; }
+  .r2 { grid-template-columns: 1fr 1fr; }
+  .r4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+
+  .box {
+    background: #fff; border: 1px solid #e6e3de; border-radius: 10px;
+    padding: 11px 12px; box-shadow: 0 1px 2px rgba(30,25,16,.05);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .btop { display: flex; align-items: center; gap: 8px; }
+  .num {
+    width: 20px; height: 20px; border-radius: 50%; flex: none;
+    display: grid; place-items: center; font-size: 11.5px; font-weight: 700;
+    background: #23201c; color: #fff;
+  }
+  .bname { font-size: 13.2px; font-weight: 700; letter-spacing: -.01em; }
+  .bpath { font-family: var(--mono); font-size: 10.6px; color: #979086; }
+  .bdesc { font-size: 11.8px; line-height: 1.42; color: #55504a; }
+  .api { font-family: var(--mono); font-size: 10.8px; color: #4a5f80; line-height: 1.6; }
+  .l-server .api { color: #8a6a1c; }
+  .l-chain .api { color: #2f6444; }
+
+  .flowline {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 9px 0 2px; font-family: var(--mono); font-size: 11.2px; color: #857f76;
+  }
+  .flowline .seg {
+    background: #fff; border: 1px solid #e2ded8; border-radius: 20px; padding: 4px 12px;
+  }
+  .flowline .seg.b { border-color: #b9c8de; color: #3f5a85; }
+  .flowline .seg.s { border-color: #ddc691; color: #8a6a1c; }
+
+  .storage { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .slot {
+    background: #f4faf6; border: 1px solid #cfe4d6; border-radius: 9px; padding: 9px 11px;
+  }
+  .sname { font-family: var(--mono); font-size: 12px; font-weight: 700; color: #2f6444; }
+  .sdesc { font-size: 11.4px; color: #4a7359; margin-top: 3px; line-height: 1.4; }
+
+  .footnote {
+    margin-top: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 13px;
+  }
+  .fn {
+    border-radius: 9px; padding: 10px 12px; font-size: 11.9px; line-height: 1.5;
+  }
+  .fn-b { background: #f2f5fa; border: 1px dashed #b2c2da; color: #3e5578; }
+  .fn-s { background: #fdf8ec; border: 1px dashed #dfc98e; color: #7c6015; }
+  .m { font-family: var(--mono); }
+</style>
+
+<div class="eyebrow">Tollgate — what runs where, and who holds which key</div>
+
+<!-- ================= buyer ================= -->
+<div class="layer l-buyer">
+  <div class="lhead">
+    <div class="ltitle">The buyer</div>
+    <div class="lsub">two front ends, one flow — six steps in both</div>
+    <div class="keytag buyer">HOLDS THE BUYER KEY</div>
+  </div>
+  <div class="row r2">
+    <div class="box">
+      <div class="btop"><div class="num">1</div><div class="bname">Browser walkthrough</div></div>
+      <div class="bpath">packages/web/src/ — main.ts · wallet.ts · money.ts · api.ts</div>
+      <div class="bdesc">Prices every call against the contract itself and refuses to escrow if that disagrees with the server. Served as static files by the metering server.</div>
+    </div>
+    <div class="box">
+      <div class="btop"><div class="num">2</div><div class="bname">Terminal walkthrough</div></div>
+      <div class="bpath">packages/demo/src/index.ts</div>
+      <div class="bdesc">The same six steps without a browser: catalogue, quote, escrow, run, settlement, balances.</div>
+    </div>
+  </div>
+</div>
+
+<div class="flowline">
+  <span class="seg b">openCall() &nbsp;+&nbsp; withdraw() &nbsp;&rarr;&nbsp; straight to the chain</span>
+  <span class="seg b">POST /quote · POST /run + signature &nbsp;&rarr;&nbsp; the server</span>
+</div>
+
+<!-- ================= server ================= -->
+<div class="layer l-server">
+  <div class="lhead">
+    <div class="ltitle">The metering server</div>
+    <div class="lsub">the provider's machine — quotes, runs, reports usage</div>
+    <div class="keytag settler">HOLDS THE SETTLER KEY</div>
+  </div>
+  <div class="row r4">
+    <div class="box">
+      <div class="btop"><div class="num">3</div><div class="bname">HTTP surface</div></div>
+      <div class="bpath">server/src/app.ts</div>
+      <div class="api">GET&nbsp;/health<br>GET&nbsp;/services<br>POST&nbsp;/quote<br>POST&nbsp;/run</div>
+    </div>
+    <div class="box">
+      <div class="btop"><div class="num">4</div><div class="bname">Catalogue</div></div>
+      <div class="bpath">server/src/catalogue.ts</div>
+      <div class="bdesc">Prompts, models and input limits. <b>No prices, no ceiling</b> — those are read from the chain.</div>
+    </div>
+    <div class="box">
+      <div class="btop"><div class="num">5</div><div class="bname">Model client</div></div>
+      <div class="bpath">server/src/ai.ts</div>
+      <div class="bdesc">Counts, then calls. Both built from one request shape so the two cannot drift.</div>
+    </div>
+    <div class="box">
+      <div class="btop"><div class="num">6</div><div class="bname">Chain client</div></div>
+      <div class="bpath">server/src/chain.ts</div>
+      <div class="bdesc">Reads services and calls; submits settlement. Transactions are serialised and retried.</div>
+    </div>
+  </div>
+</div>
+
+<div class="flowline">
+  <span class="seg s">count_tokens &nbsp;·&nbsp; messages.create(max_tokens)</span>
+  <span class="seg s">settleCall(callId, in, out) &nbsp;·&nbsp; failCall(callId, reason)</span>
+</div>
+
+<!-- ================= external + chain ================= -->
+<div class="row r2" style="align-items:stretch">
+  <div class="layer l-ext" style="margin:0">
+    <div class="lhead">
+      <div class="ltitle">Anthropic API</div>
+      <div class="keytag none">NOT PART OF THIS REPO</div>
+    </div>
+    <div class="box">
+      <div class="btop"><div class="num">7</div><div class="bname">Where the two numbers come from</div></div>
+      <div class="bdesc">
+        <span class="m">count_tokens</span> gives the input size before anything is spent — free, and
+        documented as an estimate. <span class="m">max_tokens</span> is the absolute maximum on
+        output, which is what makes the ceiling real.
+      </div>
+    </div>
+  </div>
+
+  <div class="layer l-chain" style="margin:0">
+    <div class="lhead">
+      <div class="ltitle">Tollgate.sol</div>
+      <div class="keytag none">ANY EVM CHAIN</div>
+    </div>
+    <div class="box">
+      <div class="btop"><div class="num">8</div><div class="bname">The only place a price is computed</div></div>
+      <div class="bpath">packages/contracts/contracts/Tollgate.sol</div>
+      <div class="api">quote() · openCall() · settleCall() · failCall()<br>reclaimCall() · withdraw() · withdrawTo()</div>
+    </div>
+  </div>
+</div>
+
+<div class="storage">
+  <div class="slot">
+    <div class="sname">services</div>
+    <div class="sdesc">The provider's rate card and output ceiling.</div>
+  </div>
+  <div class="slot">
+    <div class="sname">calls</div>
+    <div class="sdesc">One escrow, plus its own frozen copy of the terms it was funded under.</div>
+  </div>
+  <div class="slot">
+    <div class="sname">balances</div>
+    <div class="sdesc">Earnings, refunds and the platform cut. Withdrawn, never pushed.</div>
+  </div>
+</div>
+
+<div class="footnote">
+  <div class="fn fn-b">
+    <b>The buyer's key never reaches the server.</b> The escrow transaction and the redemption
+    signature are the two things that have to come from the buyer, and both are made on their side.
+  </div>
+  <div class="fn fn-s">
+    <b>The settler key cannot move money.</b> It may report usage on a call and nothing else.
+    Earnings go to the provider address, which is a different account.
+  </div>
+</div>

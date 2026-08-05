@@ -1,254 +1,211 @@
 # Tollgate
 
-A marketplace of AI services billed per call: a provider publishes a price, a buyer
-escrows the worst case before the call runs, and settlement charges what was actually
-used and refunds the rest.
+Auth-and-capture for AI API calls, settled on-chain.
 
-No subscription, no account, no API key for the buyer.
+[![ci](https://github.com/ashnkumar/tollgate/actions/workflows/ci.yml/badge.svg)](https://github.com/ashnkumar/tollgate/actions/workflows/ci.yml)
+[![node](https://img.shields.io/badge/node-20+-blue)](https://nodejs.org/)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
----
+![A terminal run of one call: the price is computed and confirmed against the contract before anything runs, 0.003254 ETH is escrowed, the call produces 181 of its 400 allowed output tokens, and 0.001095 ETH comes back.](docs/demo.gif)
 
-## The idea in one screen
-
-An AI call costs a variable amount — tokens in, tokens out, and you don't know the
-output length until it's finished. A buyer wants a price *before* they agree. Tollgate
-resolves that by splitting price into two moments:
-
-**Before the call**, input tokens are counted and output is capped, so the worst case is
-arithmetic rather than a guess:
-
-```
-worst case = baseFee + (inputTokens x inputRate) + (maxOutputTokens x outputRate)
-                       ^ counted up front         ^ enforced as max_tokens
-```
-
-**After the call**, the same rate card is applied to what was really used, and the
-difference goes back to the buyer.
-
-The buyer's exposure is capped at a number they agreed to. The provider is never paid
-less than cost. Neither side has to trust the other's arithmetic, because the price is
-computed on-chain from a rate card the provider published.
-
----
+One real call against the Anthropic API. The escrow is fixed *before* the model runs, because
+it is arithmetic: a counted input, a capped output, and a rate card the provider published
+on-chain. What comes back afterwards is whatever the call did not use — 33.6% here, and it
+moves every run, which is the entire reason settlement exists.
 
 ## Quickstart
 
-Requires Node 20+ and pnpm. No chain account, no faucet, no card, no wallet extension.
-
 ```bash
+git clone https://github.com/ashnkumar/tollgate && cd tollgate
 pnpm install
-./scripts/walkthrough.sh    # chain + deploy + server, then opens the browser walkthrough
+./scripts/walkthrough.sh
 ```
 
-That brings up a local chain, deploys the contract, starts the server, and opens a page
-that walks one call through all six steps. Ctrl-C stops everything it started.
+Needs Node 20+ and [pnpm](https://pnpm.io/). That brings up a local chain, deploys the
+contract, starts the server and opens a page that walks one call through all six steps.
+No API key, no wallet extension, no faucet, no account — it runs against a deterministic
+fake model by default. Ctrl-C stops everything it started.
 
-It runs against a deterministic fake model by default, so it needs no API key. For real
-calls:
+**For real calls:**
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 USE_FAKE_MODEL=false ./scripts/walkthrough.sh
 ```
 
-Prefer a terminal? `./scripts/smoke.sh` does the same round trip with no browser, and
-asserts the result — it is what CI runs.
+At Claude Opus 5's [published rates](https://platform.claude.com/docs/en/about-claude/pricing)
+a `summarize` call costs about half a cent; `explain-code`, which nearly fills its budget,
+costs about three. Prefer a terminal? `./scripts/smoke.sh` does the same round trip
+without a browser and asserts the result — it is what CI runs.
 
-### The browser walkthrough
+## What you get
 
-The page is the argument, made clickable: pick a service, watch the quote get priced
-*before* anything runs, escrow it, and see how much comes back.
+A price you agreed to before the call ran, and a bill you can recompute yourself afterwards.
+No subscription, no account, no API key on the buyer's side — only a key they already have.
 
-Two things on it are worth more than the rest:
+| | Buying an AI call the usual way | With Tollgate |
+|---|---|---|
+| **Before you commit** | A rate card and an estimate. The real number arrives on the invoice | `quote()` returns the worst case in wei, computed on-chain from the published rates and your exact input size |
+| **A short answer** | You pay the flat price whatever the call produced | Settlement charges the tokens actually used and the difference comes back |
+| **The bill** | The seller tells you what you owe | The seller reports two token counts. The contract does the arithmetic, and reverts if the result exceeds what you escrowed |
+| **Mid-call price changes** | Whatever the seller's current rate card says | The call carries its own frozen copy of the terms it was funded under |
+| **The seller vanishes** | You chase a refund | `reclaimCall()` returns the whole escrow after the timeout, and no one can stop it |
 
-- **"Priced independently from the contract."** After the server returns a quote, the
-  page calls `quote()` on-chain itself and compares. If they disagree it refuses to
-  escrow. The rate card lives on-chain precisely so a buyer never has to trust the
-  seller's arithmetic, and the page demonstrates that rather than asserting it.
-- **The settlement bar.** One bar, escrow-width, split into what was charged and what
-  came back. Different services move it a long way — `translate` on a short input gives
-  most of the escrow back; `explain-code` on a real function gives back very little.
-
-The buyer's key is held in the page and never reaches the server. Both things that have
-to come from a buyer — the escrow transaction and the redemption signature — are made
-there. It is a Hardhat development key, worthless off a local chain; a real buyer would
-hold their own, and nothing else about the flow would change.
-
-### Running it by hand
-
-Four terminals, if you want to poke at the pieces:
-
-```bash
-pnpm chain                  # 1. local chain, 20 funded accounts, ~12s
-pnpm deploy:local           # 2. deploy + list the catalogue (writes deployment.json)
-pnpm web && pnpm serve      # 3. build the page, start the metering server
-pnpm demo summarize         # 4. one call, end to end, in the terminal
-```
-
-`pnpm serve` reads `deployment.json` and the local dev key automatically — nothing to
-copy between terminals. Set `ANTHROPIC_API_KEY` before step 3 for real calls, or
-`USE_FAKE_MODEL=true` for fake ones. Try `pnpm demo explain-code` or `pnpm demo translate`.
-
-The server runs fine without `pnpm web`; it just serves the API alone.
-
----
-
-## What a call looks like
-
-Real output, `pnpm demo explain-code` against the Anthropic API:
-
-```
-2. Quote
-  input counted    174 tokens (before the call runs)
-  output ceiling   1200 tokens (enforced as max_tokens)
-  worst case       0.007174 ETH
-  chain agrees     0.007174 ETH ✓
-
-3. Escrow
-  escrowed 0.007174 ETH in 0x2ecc65dc8ab0c31c...
-
-4. Run
-  completed in 16.7s
-  [...the model's answer...]
-
-5. Settlement
-  output used      1150 of 1200 tokens
-  escrowed         0.007174 ETH
-  actually paid    0.006924 ETH
-  refunded         0.00025 ETH  (3.5% back)
-```
-
-That call nearly filled its budget, so little came back. A short one behaves very
-differently — the same demo on `translate` with a one-line input refunds 91%. That gap
-is the entire argument for settling against usage instead of charging the ceiling.
-
----
+The obvious alternative is a flat price per call, which is what most AI marketplaces do and what
+this repository's predecessor did. It is simpler, it needs no settlement transaction, and when
+your calls are uniform it is the right answer. Tollgate takes the other trade: two on-chain
+transactions instead of one, a refund you have to withdraw rather than one that never left, and
+a worst-case escrow that ties up more of the buyer's money than the call will actually cost. What
+you buy with that is a ceiling the buyer set and a bill neither side has to be trusted for.
 
 ## How it works
 
-```
-packages/contracts   Tollgate.sol — rate cards, escrow, settlement, withdrawals
-packages/server      /quote, /run — counts tokens, verifies escrow, settles
-packages/web         the browser walkthrough; buyer's key stays in the page
-packages/demo        the same walkthrough in a terminal
-scripts/walkthrough.sh  brings the stack up and opens the page
-scripts/smoke.sh     full stack against a real chain; what CI runs
-```
+![Three panels. One: the on-chain rate card plus a 254-token input and a 400-token ceiling sum to a 0.003254 ETH worst case. Two: the buyer escrows that amount and signs a redemption message, and the server checks the funded terms before spending anything. Three: the settler submits two token counts, the contract recomputes 0.002179 ETH and refunds the remaining 0.001075 ETH.](docs/how-it-works.png)
 
-The contract holds the rate card, so `quote()` is a public view function: a buyer can
-recompute the price themselves and never has to trust the server's number. The demo
-checks this on every run (the `chain agrees` line above).
+- **The price is computed in exactly one place, and it is not the server.** `quote()` is a public
+  view function, so a buyer recomputes the number themselves rather than trusting it. The browser
+  page does this on every call and refuses to escrow when the two disagree.
+- **A funded call carries its own copy of its terms** — rates, output ceiling, provider, settler.
+  Reading the live service at settlement instead would look equivalent and is not: a provider who
+  edits a service mid-flight could make an in-flight call impossible to settle, stranding the
+  buyer's escrow until it expires and earning nothing themselves.
+- **Refunds and earnings accrue to a balance you withdraw**, rather than being pushed. At per-call
+  amounts a pushed refund can cost more gas than it returns, and `withdrawTo()` lets a holder name
+  the recipient, because a balance that is correctly recorded and permanently unreachable — an
+  account whose fallback is not payable — is not a refund.
 
-A funded call carries its own frozen copy of the terms it was quoted under, so a
-provider changing prices, the output ceiling, or the settler cannot disturb a call that
-is already in flight. Redeeming a call's output requires a signature from the account
-that funded it — the call id travels over HTTP and is not, on its own, authorisation.
+### Architecture
 
-At settlement the server reports **token counts, never a price**. Cost is recomputed
-on-chain from the published rate card, and settlement reverts if it would exceed the
-escrow. So the quote is a hard ceiling enforced by the contract, not a promise.
+![Four layers. The buyer holds their own key and runs either a browser or a terminal walkthrough. The metering server holds a separate settler key and exposes four endpoints across five modules. Below sit the Anthropic API and Tollgate.sol, which owns the services, calls and balances mappings.](docs/architecture.png)
 
-Refunds and earnings accrue to a withdrawable balance rather than being transferred. For
-per-call amounts that matters: a pushed refund can cost more gas than it returns. A
-holder can withdraw to an address of their choosing, because buyers and providers may be
-contracts that cannot receive a plain transfer — and a balance that is correctly recorded
-and permanently unreachable is not a refund.
+| # | Component | Module | What it does |
+|---|---|---|---|
+| **1** | Browser walkthrough | `packages/web/src/main.ts` | Six steps, no framework. Prices each call against the contract before escrowing |
+| **2** | Terminal walkthrough | `packages/demo/src/index.ts` | The same six steps without a browser |
+| **3** | HTTP surface | `packages/server/src/app.ts` | `/quote` and `/run`, and every check that runs before a token is spent |
+| **4** | Catalogue | `packages/server/src/catalogue.ts` | Prompts, models, input limits. Deliberately holds no prices and no ceiling |
+| **5** | Model client | `packages/server/src/ai.ts` | Counts, then calls — both built from one request shape so they cannot drift |
+| **6** | Chain client | `packages/server/src/chain.ts` | Holds the settler key. Serialises and retries settlement |
+| **7** | Contract | `packages/contracts/contracts/Tollgate.sol` | Rate cards, escrow, settlement, withdrawals. The only place a price is computed |
 
-Design decisions and their reasoning are in **[SPEC.md](SPEC.md)**.
+Start with `Tollgate.sol`. It is the whole idea and it is 391 lines.
 
----
+## The settler never names a price
 
-## Configuration
+`settleCall(callId, inputTokens, outputTokens)` takes two integers. There is no argument for an
+amount. The contract recomputes the cost from the rate card frozen into the call, reverts if the
+result exceeds the escrow, and credits the difference back to the buyer. A server that wants to
+overcharge has to lie about token counts, and the escrow is the ceiling on what that lie is worth.
 
-Everything has a working local default; `.env` is only needed to override something. See
-[`.env.example`](.env.example).
+**What it costs.** Nothing on a chain can verify that a model emitted 185 tokens. Usage is
+self-reported, and this design does not fix that — it bounds it. A dishonest settler can inflate
+usage up to the escrow and not one wei past it, and a buyer who thinks they were overcharged can
+recompute the bill from public numbers. Closing the gap properly needs an oracle, a trusted
+enclave, or a proof of inference, and all three are out of scope here.
 
-| Variable | Default | Notes |
+Three properties of the Anthropic API carry the design, so each is asserted rather than assumed
+(`RUN_LIVE_TESTS=1 pnpm test`):
+
+| Property | The vendor's wording | Why it matters here |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | required unless `USE_FAKE_MODEL=true` |
-| `USE_FAKE_MODEL` | `false` | deterministic fake model; exercises payment without spending |
-| `RPC_URL` | `http://127.0.0.1:8545` | any EVM endpoint |
-| `TOLLGATE_ADDRESS` | from `deployment.json` | |
-| `SETTLER_PRIVATE_KEY` | Hardhat dev key on a local node | required for any other network |
-| `PORT` | `4000` | |
+| [`max_tokens`](https://platform.claude.com/docs/en/api/messages) | "the absolute maximum number of tokens to generate" | Without a hard ceiling the worst case is a guess, and there is nothing to escrow |
+| [`count_tokens`](https://platform.claude.com/docs/en/build-with-claude/token-counting) | "The token count is an estimate" — and it may include system-added tokens you "are not billed for" | The quote can exceed the eventual bill, so settlement charges `min(observed, quoted)` and the provider absorbs its own estimate |
+| [thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) | reasoning tokens "count toward `max_tokens` alongside the response text" | With thinking on, a buyer can pay for a full budget and receive a truncated answer, so the catalogue disables it |
 
-Nothing here is specific to a particular chain. It is plain EVM; point `RPC_URL` and
-`PRIVATE_KEY` wherever you like.
+**The honest comparison is [x402](https://www.x402.org/), not the status quo.** Its `upto` scheme
+already does the shape of this: it "authorizes up to a maximum per request; the seller settles the
+actual usage, up to that cap." If you want per-request machine payments over HTTP today, use x402
+— it is a real standard with real infrastructure, and this is a reference implementation. The
+narrow thing Tollgate does differently is publish the *formula* rather than only the cap. Under
+`upto` the final amount is asserted by the seller and bounded by the ceiling; here the unit prices
+are on-chain, the settler submits only counts, and the bill is arithmetic the buyer can repeat.
+x402 also settles in batches to amortise gas, which this does not.
 
----
+**The demo is shaped, and the shape is the finding.** The output ceilings in
+`packages/contracts/scripts/deploy.ts` are chosen, not measured — 400, 1200 and 2000 tokens — and
+they are what produce the headline. Across 17 real calls: `translate` returned 89.6–89.8% of its
+escrow, `summarize` 32.7–34.4%, and `explain-code` 0.0–3.9%. That spread is not a property of
+Tollgate. It measures how well each provider's ceiling fits its job, and a badly fitted one costs
+somebody either way — set it loose and the buyer's capital sits in escrow they were never going to
+spend; set it tight and the answer gets cut off at full price. One of the four `explain-code` runs
+returned exactly 1200 of 1200 tokens, which is what truncation looks like, and refunded nothing.
+
+`SPEC.md` has the rest: the flow, the trust model, and the decisions that were considered and dropped.
+
+## The browser walkthrough
+
+![The three panels of the walkthrough page: a quote showing 254 input tokens against a 400-token ceiling, independently priced from the contract at 0.003254 ETH; the escrow, signature and settlement transactions; and a settlement bar splitting the escrow into 0.002144 ETH charged and 0.00111 ETH refunded.](docs/walkthrough.png)
+
+The buyer's key lives in the page and never reaches the server. That is the point rather than a
+detail: the escrow transaction and the redemption signature are the two things that have to come
+from a buyer, and a page that asked the server to sign on their behalf would show the same screens
+and prove nothing. `✓ Priced independently from the contract` is the page calling `quote()` itself
+and refusing to escrow if the server's number disagrees.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `./scripts/walkthrough.sh` | The whole thing: chain, deploy, server, browser page |
+| `./scripts/smoke.sh` | The same round trip with no browser, asserted. What CI runs |
+| `pnpm chain` | A local chain with 20 funded accounts |
+| `pnpm deploy:local` | Deploy and list the catalogue; writes `deployment.json` |
+| `pnpm serve` | The metering server |
+| `pnpm demo <service>` | One call end to end in the terminal |
+| `pnpm web` | Build the browser walkthrough |
+
+`pnpm serve` reads `deployment.json` and the local development key on its own, so nothing has to
+be copied between terminals. Every setting has a working local default; [`.env.example`](.env.example)
+lists them. Nothing here is chain-specific — point `RPC_URL` and `SETTLER_PRIVATE_KEY` wherever you like.
 
 ## Tests
 
 ```bash
-pnpm test                   # 44 contract + 36 server + 14 web tests, all offline
+pnpm test                   # 44 contract + 36 server + 14 web, all offline
+RUN_LIVE_TESTS=1 pnpm test  # adds 4 that call the real API
 ./scripts/smoke.sh          # the whole stack against a real chain
-RUN_LIVE_TESTS=1 pnpm test  # adds 4 tests against the real Anthropic API
 ```
 
-The live tests are worth calling out: they assert the two API properties the pricing
-model depends on — that a token count taken before a call matches what the call reports,
-and that `max_tokens` is a hard ceiling rather than a hint. The whole design collapses if
-either is false, so they are asserted rather than assumed.
-
-`smoke.sh` also runs the browser client's own modules against the live stack, so the
-page's chain logic — pricing the call independently, escrowing, signing, withdrawing —
-is covered rather than only its arithmetic.
-
----
+The offline suite runs the entire payment lifecycle against a fake chain and a fake model, down to
+concurrent redemptions of one call id and settlement after a mid-flight rate change. The four live
+tests exist because the pricing model rests on API behaviour rather than on our own code: they
+assert that a count taken before a call matches what the call reports, and that `max_tokens` is a
+ceiling rather than a hint. `smoke.sh` additionally drives the browser client's own modules against
+a live stack, so the page's chain logic is covered rather than only its arithmetic.
 
 ## Limitations
 
-Stated plainly, because a payment system with unstated assumptions is worse than an
-honest one.
+- **Usage is self-reported.** Settlement takes the server's word for two token counts. The damage
+  is bounded — counts not prices, recomputed on-chain, reverting above the escrow — but a
+  dishonest settler can over-report up to the escrow.
+- **The independent price check does not check the token count.** The page verifies that the price
+  is right *given* an input count the server supplied. An inflated count inflates the escrow; it
+  does not inflate the bill, because settlement charges `min(observed, quoted)` and the surplus
+  comes back. The buyer's capital is briefly over-committed, not overspent.
+- **The ceiling that makes the quote safe is the ceiling that truncates the answer.** They are the
+  same number. A provider tuning it down to reduce escrow is tuning up the odds of a cut-off
+  response the buyer still pays full price for.
+- **Thinking has to be off, and cannot always be turned off.** Reasoning tokens share the
+  `max_tokens` budget, so the escrow only buys a whole answer when thinking is disabled. Claude
+  Opus 5 accepts that only at `high` effort or below — `xhigh` and `max` return a 400 — and Claude
+  Fable 5 rejects it outright. The catalogue is confined to what the ceiling can actually bound.
+- **Call state lives in process memory, and nothing recovers a call that dies mid-flight.** `/run`
+  must reach the process that issued the `/quote`, so scaling out needs shared state — including
+  for the single-use guard. If the server dies between the model call and settlement the output is
+  lost and the provider has paid for it. The escrow is never lost either way, but "never lost" is
+  weaker than "always delivered".
+- **The browser walkthrough holds a published development key.** That is what makes the quickstart
+  need no wallet. Pointing it at anything but a local node means asking a real wallet for the two
+  signatures — a change to `packages/web/src/wallet.ts` and nothing else, but it has not been done.
+- **The contract has not been audited.** It is a reference implementation, and thorough tests over
+  the paths it covers are not the same thing.
 
-- **Usage is self-reported.** Nothing on-chain can verify a token count, so settlement
-  takes the server's word for it. The damage is bounded: the settler reports counts and
-  never a price, cost is recomputed on-chain, and settlement reverts above the escrow —
-  so a dishonest settler can over-report up to the escrow but no further. Closing that
-  gap properly needs an oracle, a TEE, or a proof of inference. All out of scope.
-- **Call state is held in process memory**, so `/run` must reach the process that issued
-  the `/quote`. Fine for one server; a horizontally scaled deployment needs a shared
-  store — and note the single-use guard is per-process too, so scaling out without moving
-  both to shared state would reopen the duplicate-execution window.
-- **There is no recovery for a call that dies mid-flight.** If the server is restarted
-  between funding and running, the quote is gone and the buyer waits out `CALL_TIMEOUT`
-  before reclaiming. If it dies between the model call and settlement, the output is lost
-  and the provider has paid for it. Escrow is never lost either way — the buyer can
-  always reclaim — but "never lost" is a weaker promise than "always delivered". A
-  production version needs a durable, idempotent call state machine: funded, running,
-  generated, settled, with the result persisted before settlement is attempted and
-  retried out of band. That is a substantially bigger system than this one.
-- **One provider identity in the demo.** The contract supports any number — anyone can
-  call `registerService` — but the seed script registers all three services to one
-  address for legibility.
-- **A settlement that never lands costs the provider.** By the time settlement runs, the
-  model call has happened and the provider has been billed for it. Transient failures are
-  retried, but if the transaction ultimately does not land the call stays open until the
-  buyer reclaims and the provider is out of pocket. A production deployment would persist
-  unsettled calls and retry them out of band rather than only within the request.
-- **The model call is not retried, on purpose.** The SDK's automatic retries are turned
-  off: a connection that drops after the API has begun work still bills for that work, so
-  a retry can produce a second billable generation for a call the contract charges once.
-  Failing instead refunds the buyer in full. The cost is that a blip fails a call which
-  might have succeeded.
-- **The input count is an estimate.** `count_tokens` is documented as one, and settlement
-  bills the lower of counted and observed, so the provider absorbs any divergence and the
-  buyer's ceiling holds. See [SPEC.md](SPEC.md#who-carries-the-estimation-risk).
-- **The browser walkthrough is a local-chain demo.** It holds a published Hardhat
-  development key so the quickstart needs no wallet extension. Pointing it at anything
-  other than a local node would mean asking a real wallet for the two signatures — a
-  change to `packages/web/src/wallet.ts` and nothing else, but it has not been done.
-- **The contract has not been audited.** It is a reference implementation. The tests are
-  thorough about the paths they cover; that is not the same thing.
-- **`CALL_TIMEOUT` is a fixed hour.** Long enough for any call here, but it is a constant
-  rather than a per-service setting.
-- **Prices are in the chain's native token**, with no oracle. A production version pricing
-  in stable terms would need one.
-
----
+Also: `CALL_TIMEOUT` is a fixed hour rather than a per-service setting; the seed script registers
+all three services to one provider address for legibility, though the contract supports any number;
+prices are in the chain's native token with no oracle; the model call is deliberately not retried,
+because a connection that drops after the API began work still bills for it; and a settlement that
+never lands leaves the provider out of pocket until the buyer reclaims.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-<!-- TODO: repository URL, and a recorded GIF of the demo, once settled. -->

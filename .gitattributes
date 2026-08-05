@@ -1,0 +1,8 @@
+# The HTML under docs/ is diagram source, rendered to PNG for the README. It is
+# documentation, not application code, and counting it skews the language bar.
+docs/*.html linguist-documentation
+
+# The browser walkthrough ships its own markup and stylesheet rather than a framework.
+# They are part of the deliverable, so they are not vendored — but the stylesheet is
+# presentation, not logic, and counting it as source misrepresents the repository.
+packages/web/public/styles.css linguist-documentation
