@@ -120,14 +120,16 @@ Three properties of the Anthropic API carry the design, so each is asserted rath
 | [`count_tokens`](https://platform.claude.com/docs/en/build-with-claude/token-counting) | "The token count is an estimate" — and it may include system-added tokens you "are not billed for" | The quote can exceed the eventual bill, so settlement charges `min(observed, quoted)` and the provider absorbs its own estimate |
 | [thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) | reasoning tokens "count toward `max_tokens` alongside the response text" | With thinking on, a buyer can pay for a full budget and receive a truncated answer, so the catalogue disables it |
 
-**[x402](https://www.x402.org/) already does this shape.** Its `upto` scheme "authorizes up to a
-maximum per request; the seller settles the actual usage, up to that cap." If you want per-request
-machine payments over HTTP today, use x402 — it is a real standard with real infrastructure, and
-this is a reference implementation. The narrow thing Tollgate does differently is publish the
-*formula* rather than only the cap. Under `upto` the final amount is asserted by the seller and
-bounded by the ceiling; here the unit prices are on-chain, the settler submits only counts, and the
-bill is arithmetic the buyer can repeat. x402 also settles in batches to amortise gas, which this
-does not.
+**[x402](https://www.x402.org/) already does this shape.** Its `upto` scheme authorizes a transfer
+"of up to a **maximum amount**" where "the actual amount charged is determined at settlement time
+based on resource consumption during the request" — and the first use case its spec lists is
+paying for LLM token generation. If you want per-request machine payments over HTTP today, use
+x402 — it is a real standard with real infrastructure, and this is a reference implementation. The
+narrow thing Tollgate does differently is publish the *formula* rather than only the cap. Under
+`upto` the resource server "MUST set the `amount` field ... to the desired settlement amount";
+here the unit prices are on-chain, the settler submits only counts, and the bill is arithmetic the
+buyer can repeat. x402 also specifies a batch-settlement scheme to amortise gas, which this does
+not.
 
 **The output ceilings are chosen, not measured.** The three in
 `packages/contracts/scripts/deploy.ts` — 400, 1200 and 2000 tokens — are what produce the refund
