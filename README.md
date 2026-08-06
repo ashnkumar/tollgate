@@ -185,10 +185,6 @@ a live stack, so the page's chain logic is covered rather than only its arithmet
 - **Usage is self-reported.** Settlement takes the server's word for two token counts. The damage
   is bounded — counts not prices, recomputed on-chain, reverting above the escrow — but a
   dishonest settler can over-report up to the escrow.
-- **The independent price check does not check the token count.** The page verifies that the price
-  is right *given* an input count the server supplied. An inflated count inflates the escrow; it
-  does not inflate the bill, because settlement charges `min(observed, quoted)` and the surplus
-  comes back. The buyer's capital is briefly over-committed, not overspent.
 - **The ceiling that makes the quote safe is the ceiling that truncates the answer.** They are the
   same number. A provider tuning it down to reduce escrow is tuning up the odds of a cut-off
   response the buyer still pays full price for.
@@ -196,22 +192,15 @@ a live stack, so the page's chain logic is covered rather than only its arithmet
   `max_tokens` budget, so the escrow only buys a whole answer when thinking is disabled. Claude
   Opus 5 accepts that only at `high` effort or below — `xhigh` and `max` return a 400 — and Claude
   Fable 5 rejects it outright. The catalogue is confined to what the ceiling can actually bound.
-- **Call state lives in process memory, and nothing recovers a call that dies mid-flight.** `/run`
-  must reach the process that issued the `/quote`, so scaling out needs shared state — including
-  for the single-use guard. If the server dies between the model call and settlement the output is
-  lost and the provider has paid for it. The escrow is never lost either way, but "never lost" is
-  weaker than "always delivered".
-- **The browser walkthrough holds a published development key.** That is what makes the quickstart
-  need no wallet. Pointing it at anything but a local node means asking a real wallet for the two
-  signatures — a change to `packages/web/src/wallet.ts` and nothing else, but it has not been done.
-- **The contract has not been audited.** It is a reference implementation, and thorough tests over
-  the paths it covers are not the same thing.
 
-Also: `CALL_TIMEOUT` is a fixed hour rather than a per-service setting; the seed script registers
-all three services to one provider address for legibility, though the contract supports any number;
-prices are in the chain's native token with no oracle; the model call is deliberately not retried,
-because a connection that drops after the API began work still bills for it; and a settlement that
-never lands leaves the provider out of pocket until the buyer reclaims.
+Also: the contract has not been audited; the browser walkthrough holds a published development key,
+which is what lets the quickstart skip the wallet; call state lives in process memory, so `/run`
+must reach the process that issued the `/quote`, and a crash between the model call and settlement
+loses the output the provider already paid for; the page's independent price check verifies the
+price *given* an input count the server supplied, not the count itself, so an inflated count
+over-commits the buyer's capital without overspending it; `CALL_TIMEOUT` is a fixed hour; prices are
+in the chain's native token with no oracle; and the model call is deliberately not retried, because
+a connection that drops after the API began work still bills for it.
 
 ## License
 
