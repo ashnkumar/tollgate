@@ -40,8 +40,16 @@ without a browser and asserts the result — it is what CI runs.
 
 ## What you get
 
-A price you agreed to before the call ran, and a bill you can recompute yourself afterwards.
-No subscription, no account, no API key on the buyer's side — only a key they already have.
+Nobody knows what an AI call costs until after it has run. You can count the input before you
+start; the output is however much the model decides to write. Everything else about buying one
+follows from that.
+
+Cards solved this shape long ago. A gas pump authorizes a ceiling against your card before it
+will dispense anything, you fill up, and it captures what you actually pumped. The ceiling is not a
+price — it is what lets the pump start without knowing where it will stop. Tollgate is that, for
+one API call: a worst case agreed before the call runs, a bill you can recompute yourself
+afterwards, and no subscription, no account, no API key on the buyer's side — only a key they
+already have.
 
 | | Buying an AI call the usual way | With Tollgate |
 |---|---|---|
@@ -70,9 +78,9 @@ you buy with that is a ceiling the buyer set and a bill neither side has to be t
   edits a service mid-flight could make an in-flight call impossible to settle, stranding the
   buyer's escrow until it expires and earning nothing themselves.
 - **Refunds and earnings accrue to a balance you withdraw**, rather than being pushed. At per-call
-  amounts a pushed refund can cost more gas than it returns, and `withdrawTo()` lets a holder name
-  the recipient, because a balance that is correctly recorded and permanently unreachable — an
-  account whose fallback is not payable — is not a refund.
+  amounts a pushed refund can cost more gas than it returns. `withdrawTo()` lets a holder name the
+  recipient, because a balance credited to an account whose fallback is not payable is recorded
+  correctly and permanently unreachable.
 
 ### Architecture
 
@@ -112,18 +120,18 @@ Three properties of the Anthropic API carry the design, so each is asserted rath
 | [`count_tokens`](https://platform.claude.com/docs/en/build-with-claude/token-counting) | "The token count is an estimate" — and it may include system-added tokens you "are not billed for" | The quote can exceed the eventual bill, so settlement charges `min(observed, quoted)` and the provider absorbs its own estimate |
 | [thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) | reasoning tokens "count toward `max_tokens` alongside the response text" | With thinking on, a buyer can pay for a full budget and receive a truncated answer, so the catalogue disables it |
 
-**The honest comparison is [x402](https://www.x402.org/), not the status quo.** Its `upto` scheme
-already does the shape of this: it "authorizes up to a maximum per request; the seller settles the
-actual usage, up to that cap." If you want per-request machine payments over HTTP today, use x402
-— it is a real standard with real infrastructure, and this is a reference implementation. The
-narrow thing Tollgate does differently is publish the *formula* rather than only the cap. Under
-`upto` the final amount is asserted by the seller and bounded by the ceiling; here the unit prices
-are on-chain, the settler submits only counts, and the bill is arithmetic the buyer can repeat.
-x402 also settles in batches to amortise gas, which this does not.
+**[x402](https://www.x402.org/) already does this shape.** Its `upto` scheme "authorizes up to a
+maximum per request; the seller settles the actual usage, up to that cap." If you want per-request
+machine payments over HTTP today, use x402 — it is a real standard with real infrastructure, and
+this is a reference implementation. The narrow thing Tollgate does differently is publish the
+*formula* rather than only the cap. Under `upto` the final amount is asserted by the seller and
+bounded by the ceiling; here the unit prices are on-chain, the settler submits only counts, and the
+bill is arithmetic the buyer can repeat. x402 also settles in batches to amortise gas, which this
+does not.
 
-**The demo is shaped, and the shape is the finding.** The output ceilings in
-`packages/contracts/scripts/deploy.ts` are chosen, not measured — 400, 1200 and 2000 tokens — and
-they are what produce the headline. Across 17 real calls: `translate` returned 89.6–89.8% of its
+**The output ceilings are chosen, not measured.** The three in
+`packages/contracts/scripts/deploy.ts` — 400, 1200 and 2000 tokens — are what produce the refund
+in the recording at the top. Across 17 real calls: `translate` returned 89.6–89.8% of its
 escrow, `summarize` 32.7–34.4%, and `explain-code` 0.0–3.9%. That spread is not a property of
 Tollgate. It measures how well each provider's ceiling fits its job, and a badly fitted one costs
 somebody either way — set it loose and the buyer's capital sits in escrow they were never going to
@@ -136,10 +144,9 @@ returned exactly 1200 of 1200 tokens, which is what truncation looks like, and r
 
 ![The three panels of the walkthrough page: a quote showing 254 input tokens against a 400-token ceiling, independently priced from the contract at 0.003254 ETH; the escrow, signature and settlement transactions; and a settlement bar splitting the escrow into 0.002144 ETH charged and 0.00111 ETH refunded.](docs/walkthrough.png)
 
-The buyer's key lives in the page and never reaches the server. That is the point rather than a
-detail: the escrow transaction and the redemption signature are the two things that have to come
-from a buyer, and a page that asked the server to sign on their behalf would show the same screens
-and prove nothing. `✓ Priced independently from the contract` is the page calling `quote()` itself
+The buyer's key lives in the page and never reaches the server. The escrow transaction and the
+redemption signature are the two things that have to come from a buyer, and a page that asked the
+server to sign on their behalf would show the same screens and prove nothing. `✓ Priced independently from the contract` is the page calling `quote()` itself
 and refusing to escrow if the server's number disagrees.
 
 ## Commands
