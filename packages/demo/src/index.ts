@@ -20,7 +20,8 @@ import {
 
 const ABI = [
   "function quote(bytes32 serviceId, uint32 inputTokens) view returns (uint256)",
-  "function openCall(bytes32 callId, bytes32 serviceId, uint32 inputTokens) payable",
+  "function termsHash(bytes32 serviceId) view returns (bytes32)",
+  "function openCall(bytes32 callId, bytes32 serviceId, uint32 inputTokens, bytes32 expectedTerms) payable",
   "function balances(address) view returns (uint256)",
   "function withdraw()",
 ];
@@ -165,9 +166,15 @@ async function main() {
     `  chain agrees     ${formatEther(onChainQuote)} ETH ${onChainQuote === BigInt(quote.quoteWei) ? "✓" : "✗ MISMATCH"}`,
   );
 
+  // The rate card that price came from, read in the same breath. Escrowing commits to
+  // it, so a formula swapped in before this transaction mines makes the escrow revert
+  // rather than fund a call priced by terms the buyer never saw.
+  const quotedTerms: string = await tollgate.termsHash(quote.serviceId);
+  console.log(`  terms            ${quotedTerms.slice(0, 18)}…`);
+
   // ── 3. escrow ──────────────────────────────────────────────────────────
   heading("3. Escrow");
-  const openTx = await tollgate.openCall(quote.callId, quote.serviceId, quote.inputTokens, {
+  const openTx = await tollgate.openCall(quote.callId, quote.serviceId, quote.inputTokens, quotedTerms, {
     value: onChainQuote,
   });
   await openTx.wait();

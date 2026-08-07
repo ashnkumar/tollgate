@@ -52,6 +52,10 @@ export class FakeChain implements Chain {
    * The terms are copied onto the call, because that is what `openCall` does: a funded
    * call carries the rate card it was funded under, and everything downstream is
    * checked against that copy rather than against whatever the provider says now.
+   *
+   * `escrow` overrides the amount. The contract records the quote whatever a buyer
+   * sends, so the only way a real escrow falls below a quote is a rate change between
+   * the two; the override reaches that state directly.
    */
   async fundCall(callId: string, slug: string, inputTokens: number, escrow?: bigint): Promise<void> {
     const sid = serviceId(slug);
@@ -66,6 +70,7 @@ export class FakeChain implements Chain {
       maxOutputTokens: s.maxOutputTokens,
       expiresAt: BigInt(Math.floor(Date.now() / 1000) + 3600),
       settled: false,
+      provider: s.provider,
       settler: s.settler,
       baseFeeWei: s.baseFeeWei,
       perInputTokenWei: s.perInputTokenWei,
@@ -98,6 +103,7 @@ export class FakeChain implements Chain {
       maxOutputTokens: 0,
       expiresAt: 0n,
       settled: false,
+      provider: ZERO,
       settler: ZERO,
       baseFeeWei: 0n,
       perInputTokenWei: 0n,

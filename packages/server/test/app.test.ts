@@ -297,6 +297,51 @@ describe("payment guards", () => {
       }
     });
 
+    /**
+     * Sweeping runs when a quote is created, so on a server nobody is quoting against,
+     * an old quote used to stay redeemable for as long as the process lived. Redemption
+     * checks the age itself.
+     */
+    it("refuses a quote past its TTL even when nothing has swept", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const q = await quoteFor();
+        await chain.fundCall(q.callId, "summarize", q.inputTokens);
+
+        vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+        const res = await runCall(app, q.callId);
+
+        expect(res.status).toBe(410);
+        expect(chain.settleCalls).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /**
+     * Counting tokens is a call to Anthropic — free, but rate-limited per account — and
+     * `/quote` is unauthenticated. Doing it before the capacity check let anyone consume
+     * that limit against a store they were never going to be admitted to.
+     */
+    it("refuses at capacity without counting tokens first", async () => {
+      let counted = 0;
+      const ai: AiClient = {
+        countInputTokens: async () => {
+          counted += 1;
+          return 50;
+        },
+        run: async () => ({ text: "out", inputTokens: 50, outputTokens: 10 }),
+      };
+      const capped = createApp({ ai, chain, contractAddress: chain.contractAddress, limits: { maxPendingQuotes: 1 } });
+
+      await request(capped).post("/quote").send({ service: "summarize", input: "first" });
+      expect(counted).toBe(1);
+
+      const res = await request(capped).post("/quote").send({ service: "summarize", input: "second" });
+      expect(res.status).toBe(503);
+      expect(counted).toBe(1);
+    });
+
     it("refuses to mint unbounded quotes", async () => {
       // Same behavior as the production ceiling, exercised at a size that keeps the
       // test fast rather than minting a thousand quotes through a deferred fake chain.
@@ -372,6 +417,38 @@ describe("payment guards", () => {
       const res = await runCall(watched, q.callId);
 
       expect(res.status).toBe(409);
+      expect(calls).toHaveLength(0);
+      expect(chain.settleCalls).toHaveLength(0);
+    });
+
+    /**
+     * The check that matters most and is easiest to miss, because nothing visible moves.
+     * The provider swaps the formula for one that prices this exact input identically —
+     * base fee up, per-token rates to zero — so the total, the ceiling and the input
+     * count all still agree. Only the rate card itself changed, and under the new one a
+     * short answer costs the full escrow.
+     */
+    it("refuses when the rate card changed but the total did not", async () => {
+      const { app: watched, calls } = watchfulApp();
+      const q = await quoteOn(watched);
+
+      chain.addService("summarize", {
+        baseFeeWei: BigInt(q.quoteWei),
+        perInputTokenWei: 0n,
+        perOutputTokenWei: 0n,
+      });
+      await chain.fundCall(q.callId, "summarize", q.inputTokens);
+
+      // The swap is invisible to every check that looks at a number rather than a card.
+      const funded = chain.calls.get(q.callId)!;
+      expect(funded.escrowWei).toBe(BigInt(q.quoteWei));
+      expect(funded.quotedInputTokens).toBe(q.inputTokens);
+      expect(funded.maxOutputTokens).toBe(q.maxOutputTokens);
+
+      const res = await runCall(watched, q.callId);
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/base fee/);
       expect(calls).toHaveLength(0);
       expect(chain.settleCalls).toHaveLength(0);
     });

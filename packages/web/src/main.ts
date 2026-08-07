@@ -100,6 +100,9 @@ interface State {
   services: ListedService[];
   selected: ListedService | undefined;
   quote: Quote | undefined;
+  /** The rate card this quote was priced against, read at the same moment. Escrowing
+   *  commits to it, so a provider cannot swap the formula out from under the page. */
+  quotedTerms: string | undefined;
   running: boolean;
 }
 
@@ -235,8 +238,13 @@ async function getQuote(): Promise<void> {
     // reason the price lives in the contract rather than in the server.
     const verify = el("quote-verify");
     verify.replaceChildren();
+    state.quotedTerms = undefined;
     try {
       const onChain = await state.buyer.quote(quote.serviceId, quote.inputTokens);
+      // Read alongside the price, and passed to `openCall` below. The total on its own is
+      // not a commitment: a provider can keep it identical for this one input size while
+      // moving the cost of a short answer up to the ceiling.
+      state.quotedTerms = await state.buyer.termsHash(quote.serviceId);
       const agrees = onChain === quoteWei;
       verify.className = `verify ${agrees ? "ok" : "bad"}`;
       verify.textContent = agrees
@@ -269,7 +277,8 @@ async function getQuote(): Promise<void> {
 async function run(): Promise<void> {
   const quote = state.quote;
   const service = state.selected;
-  if (!quote || !service || state.running) return;
+  const quotedTerms = state.quotedTerms;
+  if (!quote || !service || !quotedTerms || state.running) return;
 
   state.running = true;
   clearFailure();
@@ -289,6 +298,7 @@ async function run(): Promise<void> {
       quote.callId,
       quote.serviceId,
       quote.inputTokens,
+      quotedTerms,
       quoteWei,
     );
     escrow.done(shortHex(hash, 10, 8));
@@ -442,6 +452,7 @@ async function boot(): Promise<void> {
     services: (await api.services()).services,
     selected: undefined,
     quote: undefined,
+    quotedTerms: undefined,
     running: false,
   };
 

@@ -22,17 +22,20 @@ import {
 
 const ABI = [
   "function quote(bytes32 serviceId, uint32 inputTokens) view returns (uint256)",
-  "function openCall(bytes32 callId, bytes32 serviceId, uint32 inputTokens) payable",
+  "function termsHash(bytes32 serviceId) view returns (bytes32)",
+  "function openCall(bytes32 callId, bytes32 serviceId, uint32 inputTokens, bytes32 expectedTerms) payable",
   "function balances(address) view returns (uint256)",
   "function withdraw()",
 ] as const;
 
 interface TollgateMethods {
   quote(serviceId: string, inputTokens: number): Promise<bigint>;
+  termsHash(serviceId: string): Promise<string>;
   openCall(
     callId: string,
     serviceId: string,
     inputTokens: number,
+    expectedTerms: string,
     overrides: { value: bigint },
   ): Promise<ContractTransactionResponse>;
   balances(account: string): Promise<bigint>;
@@ -71,7 +74,15 @@ export interface Buyer {
   chainId: bigint;
   /** Price this call on-chain, without taking the server's word for it. */
   quote(serviceId: string, inputTokens: number): Promise<bigint>;
-  openCall(callId: string, serviceId: string, inputTokens: number, valueWei: bigint): Promise<string>;
+  /** The rate card the price above was computed from, as a hash to commit to. */
+  termsHash(serviceId: string): Promise<string>;
+  openCall(
+    callId: string,
+    serviceId: string,
+    inputTokens: number,
+    expectedTerms: string,
+    valueWei: bigint,
+  ): Promise<string>;
   sign(callId: string): Promise<string>;
   balance(): Promise<bigint>;
   /** Native balance of the buyer account, for showing what the escrow came out of. */
@@ -111,8 +122,12 @@ export async function connect(rpcUrl: string, contractAddress: string): Promise<
 
     quote: (serviceId, inputTokens) => tollgate.quote(serviceId, inputTokens),
 
-    async openCall(callId, serviceId, inputTokens, valueWei) {
-      const tx = await tollgate.openCall(callId, serviceId, inputTokens, { value: valueWei });
+    termsHash: (serviceId) => tollgate.termsHash(serviceId),
+
+    async openCall(callId, serviceId, inputTokens, expectedTerms, valueWei) {
+      const tx = await tollgate.openCall(callId, serviceId, inputTokens, expectedTerms, {
+        value: valueWei,
+      });
       await tx.wait();
       return tx.hash;
     },

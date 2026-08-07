@@ -6,6 +6,15 @@ import { HDNodeWallet, Mnemonic } from "ethers";
 
 export interface Config {
   port: number;
+  /**
+   * Interface to bind. Loopback by default.
+   *
+   * `listen(port)` with no host binds every interface, so the obvious version of this
+   * put an unauthenticated endpoint holding an API key on the local network while
+   * printing `http://localhost:4000` and looking like a private demo. Exposing it is
+   * fine; it should be something you typed.
+   */
+  host: string;
   rpcUrl: string;
   tollgateAddress: string;
   /** Key the server signs settlements with. Must be the service's registered `settler`. */
@@ -78,7 +87,28 @@ function findWebRoot(): string | undefined {
   return index ? dirname(index) : undefined;
 }
 
+/**
+ * Load `.env` from the repo root, if there is one.
+ *
+ * `.env.example` told people to copy this file and nothing read it, so every override
+ * they wrote was silently ignored. `process.loadEnvFile` landed in Node 20.12; on
+ * anything older the file is skipped, and that is worth saying out loud rather than
+ * failing later with a value the user believes they set. Real environment variables
+ * always win — the loader does not overwrite what is already set.
+ */
+function loadDotEnv(): void {
+  const path = findUpwards(".env");
+  if (!path) return;
+  const load = (process as { loadEnvFile?: (p: string) => void }).loadEnvFile;
+  if (!load) {
+    console.warn(`Found ${path} but this Node cannot read it (needs 20.12+). Pass the variables inline instead.`);
+    return;
+  }
+  load.call(process, path);
+}
+
 export function loadConfig(): Config {
+  loadDotEnv();
   const deployment = readDeployment();
 
   const tollgateAddress = process.env.TOLLGATE_ADDRESS ?? deployment?.address;
@@ -96,6 +126,7 @@ export function loadConfig(): Config {
 
   return {
     port: Number(process.env.PORT ?? 4000),
+    host: process.env.HOST ?? "127.0.0.1",
     rpcUrl: process.env.RPC_URL ?? "http://127.0.0.1:8545",
     tollgateAddress,
     settlerPrivateKey: explicitKey ?? devSettlerKey(),

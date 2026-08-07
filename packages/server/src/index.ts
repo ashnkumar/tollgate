@@ -25,9 +25,10 @@ const app = createApp({
   webRoot: config.webRoot,
 });
 
-app.listen(config.port, () => {
+app.listen(config.port, config.host, () => {
   console.log(`tollgate  http://localhost:${config.port}`);
   console.log(`rpc:      ${config.rpcUrl}`);
+  console.log(`bound:    ${config.host}${config.host === "127.0.0.1" ? " (loopback only; set HOST to expose it)" : ""}`);
   console.log(`contract: ${config.tollgateAddress}`);
   console.log(`settler:  ${chain.settlerAddress}`);
   console.log(

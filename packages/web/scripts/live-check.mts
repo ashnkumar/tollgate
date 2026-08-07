@@ -56,8 +56,18 @@ check("quoted before running", quoteWei > 0n, `${formatEth(quoteWei)} ETH for ${
 const onChain = await buyer.quote(quote.serviceId, quote.inputTokens);
 check("the chain agrees with the server", onChain === quoteWei, `${formatEth(onChain)} ETH`);
 
+// And commits to the card that price came from, not just to the number it produced.
+const quotedTerms = await buyer.termsHash(quote.serviceId);
+check("the rate card is pinned", /^0x[0-9a-f]{64}$/.test(quotedTerms), quotedTerms.slice(0, 18) + "…");
+
 const walletBefore = await buyer.walletBalance();
-const escrowHash = await buyer.openCall(quote.callId, quote.serviceId, quote.inputTokens, quoteWei);
+const escrowHash = await buyer.openCall(
+  quote.callId,
+  quote.serviceId,
+  quote.inputTokens,
+  quotedTerms,
+  quoteWei,
+);
 check("escrow landed", escrowHash.startsWith("0x"));
 
 const signature = await buyer.sign(quote.callId);

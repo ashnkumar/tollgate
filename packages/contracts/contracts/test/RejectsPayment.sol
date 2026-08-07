@@ -2,7 +2,10 @@
 pragma solidity 0.8.24;
 
 interface ITollgate {
-    function openCall(bytes32 callId, bytes32 serviceId, uint32 inputTokens) external payable;
+    function openCall(bytes32 callId, bytes32 serviceId, uint32 inputTokens, bytes32 expectedTerms)
+        external
+        payable;
+    function termsHash(bytes32 serviceId) external view returns (bytes32);
     function withdraw() external;
     function withdrawTo(address payable recipient) external;
 }
@@ -23,7 +26,7 @@ contract RejectsPayment {
     }
 
     function open(bytes32 callId, bytes32 serviceId, uint32 inputTokens, uint256 value) external {
-        tollgate.openCall{value: value}(callId, serviceId, inputTokens);
+        tollgate.openCall{value: value}(callId, serviceId, inputTokens, tollgate.termsHash(serviceId));
     }
 
     function pull() external {

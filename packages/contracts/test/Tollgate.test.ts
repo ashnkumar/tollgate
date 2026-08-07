@@ -27,6 +27,9 @@ describe("Tollgate", () => {
   let buyer: HardhatEthersSigner;
   let stranger: HardhatEthersSigner;
 
+  /** The live rate-card hash — what an honest buyer commits to when they escrow. */
+  const terms = (service = SERVICE) => tollgate.termsHash(service);
+
   beforeEach(async () => {
     [treasury, provider, settler, buyer, stranger] = await ethers.getSigners();
     const factory = await ethers.getContractFactory("Tollgate");
@@ -97,7 +100,7 @@ describe("Tollgate", () => {
       const callId = id("call-1");
       const q = await tollgate.quote(SERVICE, 100);
 
-      await expect(tollgate.connect(buyer).openCall(callId, SERVICE, 100, { value: q }))
+      await expect(tollgate.connect(buyer).openCall(callId, SERVICE, 100, await terms(), { value: q }))
         .to.emit(tollgate, "CallOpened")
         .withArgs(callId, SERVICE, buyer.address, 100, q, anyUint64());
 
@@ -113,7 +116,7 @@ describe("Tollgate", () => {
     // only, so one wei bought a call priced in whole tokens.
     it("rejects underpayment — one wei cannot buy a call", async () => {
       const q = await tollgate.quote(SERVICE, 100);
-      await expect(tollgate.connect(buyer).openCall(id("cheap"), SERVICE, 100, { value: 1n }))
+      await expect(tollgate.connect(buyer).openCall(id("cheap"), SERVICE, 100, await terms(), { value: 1n }))
         .to.be.revertedWithCustomError(tollgate, "Underfunded")
         .withArgs(q, 1n);
     });
@@ -121,15 +124,15 @@ describe("Tollgate", () => {
     it("rejects a hair under the quote", async () => {
       const q = await tollgate.quote(SERVICE, 100);
       await expect(
-        tollgate.connect(buyer).openCall(id("almost"), SERVICE, 100, { value: q - 1n }),
+        tollgate.connect(buyer).openCall(id("almost"), SERVICE, 100, await terms(), { value: q - 1n }),
       ).to.be.revertedWithCustomError(tollgate, "Underfunded");
     });
 
     it("rejects a duplicate call id", async () => {
       const q = await tollgate.quote(SERVICE, 10);
-      await tollgate.connect(buyer).openCall(id("dup"), SERVICE, 10, { value: q });
+      await tollgate.connect(buyer).openCall(id("dup"), SERVICE, 10, await terms(), { value: q });
       await expect(
-        tollgate.connect(buyer).openCall(id("dup"), SERVICE, 10, { value: q }),
+        tollgate.connect(buyer).openCall(id("dup"), SERVICE, 10, await terms(), { value: q }),
       ).to.be.revertedWithCustomError(tollgate, "CallExists");
     });
 
@@ -137,8 +140,59 @@ describe("Tollgate", () => {
       await tollgate.connect(provider).setServiceActive(SERVICE, false);
       const q = await tollgate.quote(SERVICE, 10);
       await expect(
-        tollgate.connect(buyer).openCall(id("off"), SERVICE, 10, { value: q }),
+        tollgate.connect(buyer).openCall(id("off"), SERVICE, 10, await terms(), { value: q }),
       ).to.be.revertedWithCustomError(tollgate, "ServiceInactive");
+    });
+
+    /**
+     * Overfunding must not raise the ceiling. Recording `msg.value` as the escrow made a
+     * buyer who rounded up settleable at the rounded-up figure, which quietly turned
+     * "you pay at most your quote" into "you pay at most whatever you happened to send".
+     */
+    it("escrows the quote and refunds the surplus when a buyer overfunds", async () => {
+      const callId = id("over");
+      const q = await tollgate.quote(SERVICE, 100);
+      const surplus = ethers.parseEther("0.5");
+
+      await tollgate.connect(buyer).openCall(callId, SERVICE, 100, await terms(), { value: q + surplus });
+
+      expect((await tollgate.calls(callId)).escrowWei).to.equal(q);
+      expect(await tollgate.balances(buyer.address)).to.equal(surplus);
+
+      // And the settler cannot reach the surplus: the escrow is the quote.
+      await expect(
+        tollgate.connect(settler).settleCall(callId, 100 * 100, MAX_OUT),
+      ).to.be.revertedWithCustomError(tollgate, "InputOverQuote");
+      await tollgate.connect(settler).settleCall(callId, 100, MAX_OUT);
+      expect(await tollgate.balances(provider.address)).to.be.lessThan(q);
+    });
+
+    /**
+     * A total is not a rate card. The provider here keeps the quote for a 100-token input
+     * exactly where it was, while making a short answer cost the full ceiling. Committing
+     * to the terms hash is what turns the buyer's price check into a price agreement.
+     */
+    it("rejects a call funded against a rate card that has since changed", async () => {
+      const q = await tollgate.quote(SERVICE, 100);
+      const staleTerms = await terms();
+
+      // Same quote at 100 input tokens, a completely different formula.
+      const newBase = BASE + 100n * PER_IN + BigInt(MAX_OUT) * PER_OUT;
+      await tollgate.connect(provider).updateService(SERVICE, settler.address, newBase, 0n, 0n, MAX_OUT);
+      expect(await tollgate.quote(SERVICE, 100)).to.equal(q);
+
+      await expect(
+        tollgate.connect(buyer).openCall(id("swapped"), SERVICE, 100, staleTerms, { value: q }),
+      ).to.be.revertedWithCustomError(tollgate, "TermsChanged");
+
+      // The buyer who re-reads the card can still fund it.
+      await tollgate.connect(buyer).openCall(id("swapped"), SERVICE, 100, await terms(), { value: q });
+    });
+
+    it("changes the terms hash when any priced term moves", async () => {
+      const before = await terms();
+      await tollgate.connect(provider).updateService(SERVICE, settler.address, BASE, PER_IN, PER_OUT + 1n, MAX_OUT);
+      expect(await terms()).to.not.equal(before);
     });
   });
 
@@ -149,7 +203,7 @@ describe("Tollgate", () => {
 
     beforeEach(async () => {
       quoted = await tollgate.quote(SERVICE, Number(IN));
-      await tollgate.connect(buyer).openCall(callId, SERVICE, Number(IN), { value: quoted });
+      await tollgate.connect(buyer).openCall(callId, SERVICE, Number(IN), await terms(), { value: quoted });
     });
 
     it("charges actual usage and refunds the rest", async () => {
@@ -200,13 +254,32 @@ describe("Tollgate", () => {
         .withArgs(MAX_OUT + 1, MAX_OUT);
     });
 
-    // The escrow is a hard ceiling on the buyer's exposure. A settler that over-reports
-    // input cannot reach past it — the call reverts rather than charging more.
+    /**
+     * A settler that over-reports input is stopped twice over: by the per-count bound
+     * below, and — if that were removed — by the escrow. Both matter, because they fail
+     * at different points. This one is far enough past the escrow to show the outer
+     * bound is still there behind the inner one.
+     */
     it("cannot charge past the escrow by inflating input tokens", async () => {
       const inflated = Number(IN) * 100;
-      await expect(
-        tollgate.connect(settler).settleCall(callId, inflated, MAX_OUT),
-      ).to.be.revertedWithCustomError(tollgate, "CostExceedsEscrow");
+      await expect(tollgate.connect(settler).settleCall(callId, inflated, MAX_OUT))
+        .to.be.revertedWithCustomError(tollgate, "InputOverQuote")
+        .withArgs(inflated, Number(IN));
+      expect(costOf(BigInt(inflated), BigInt(MAX_OUT))).to.be.greaterThan(quoted);
+    });
+
+    /**
+     * The escrow bound alone is not enough, because a settler can trade unused output
+     * budget for input it never counted. Four extra input tokens against one fewer output
+     * token stays under the escrow and still bills for work the buyer's price was never
+     * computed from. Each count is bounded separately for that reason.
+     */
+    it("cannot report more input than the quote was priced for", async () => {
+      const stillUnderEscrow = costOf(IN + 4n, BigInt(MAX_OUT) - 1n);
+      expect(stillUnderEscrow).to.be.lessThan(quoted);
+      await expect(tollgate.connect(settler).settleCall(callId, Number(IN) + 4, MAX_OUT - 1))
+        .to.be.revertedWithCustomError(tollgate, "InputOverQuote")
+        .withArgs(Number(IN) + 4, Number(IN));
     });
 
     it("cannot settle twice", async () => {
@@ -300,7 +373,7 @@ describe("Tollgate", () => {
 
     beforeEach(async () => {
       quoted = await tollgate.quote(SERVICE, 50);
-      await tollgate.connect(buyer).openCall(callId, SERVICE, 50, { value: quoted });
+      await tollgate.connect(buyer).openCall(callId, SERVICE, 50, await terms(), { value: quoted });
     });
 
     it("returns the whole escrow when the service errors", async () => {
@@ -351,7 +424,7 @@ describe("Tollgate", () => {
   describe("withdrawal", () => {
     beforeEach(async () => {
       const q = await tollgate.quote(SERVICE, 100);
-      await tollgate.connect(buyer).openCall(id("w"), SERVICE, 100, { value: q });
+      await tollgate.connect(buyer).openCall(id("w"), SERVICE, 100, await terms(), { value: q });
       await tollgate.connect(settler).settleCall(id("w"), 100, 40);
     });
 

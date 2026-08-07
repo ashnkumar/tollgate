@@ -15,8 +15,39 @@ interface PendingQuote {
   /** Snapshotted from the rate card at quote time, so a mid-flight rate change
    *  cannot move the ceiling out from under a call the buyer already funded. */
   maxOutputTokens: number;
+  /**
+   * The whole rate card this quote was priced against, not just the total it produced.
+   *
+   * Comparing totals is not enough. A provider can move `baseFeeWei` up and
+   * `perOutputTokenWei` down so the quote for this one input size is unchanged while
+   * every short answer now costs the full ceiling. The buyer's own commitment is the
+   * hash they pass to `openCall`; this is the server refusing to spend tokens on a call
+   * whose frozen terms are not the terms it quoted.
+   */
+  terms: RateCard;
   quoteWei: bigint;
   issuedAt: number;
+}
+
+/** The fields a price is computed from, plus who is paid and who may settle. */
+interface RateCard {
+  provider: string;
+  settler: string;
+  baseFeeWei: bigint;
+  perInputTokenWei: bigint;
+  perOutputTokenWei: bigint;
+  maxOutputTokens: number;
+}
+
+/** Which term changed, or undefined when the two cards are identical. */
+function firstDifference(quoted: RateCard, funded: RateCard): string | undefined {
+  if (getAddress(quoted.provider) !== getAddress(funded.provider)) return "provider";
+  if (getAddress(quoted.settler) !== getAddress(funded.settler)) return "settler";
+  if (quoted.baseFeeWei !== funded.baseFeeWei) return "base fee";
+  if (quoted.perInputTokenWei !== funded.perInputTokenWei) return "input rate";
+  if (quoted.perOutputTokenWei !== funded.perOutputTokenWei) return "output rate";
+  if (quoted.maxOutputTokens !== funded.maxOutputTokens) return "output ceiling";
+  return undefined;
 }
 
 export interface AppDeps {
@@ -55,9 +86,17 @@ export function redemptionMessage(callId: string, contractAddress: string): stri
 
 /**
  * Refuse to start work that cannot be settled. `reclaimCall` becomes available at
- * `expiresAt`, and a buyer who reclaims while the model is mid-flight would leave the
+ * `expiresAt`, and a buyer who reclaims while the model is mid-flight leaves the
  * provider having done the work for nothing — `settleCall` reverts once the call is
- * marked settled. Requiring headroom removes the race rather than losing it politely.
+ * marked settled.
+ *
+ * This narrows that race rather than closing it. The check happens once, against this
+ * machine's clock, before a generation that may take two minutes and a settlement that
+ * queues behind every other settlement on the same key. Clock skew, a slow node, or a
+ * backlog can still carry a call past its expiry, and after expiry settlement and the
+ * buyer's reclaim are simply first transaction wins. Closing it properly means either
+ * reserving the window on-chain or refusing settlement after expiry, and the contract
+ * does neither.
  */
 const SETTLEMENT_HEADROOM_SECONDS = 300n;
 
@@ -165,6 +204,15 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
     if (!onChain) throw new HttpError(503, `Service ${slug} is not registered on-chain`);
     if (!onChain.active) throw new HttpError(409, `Service ${slug} is not accepting calls`);
 
+    // Capacity is checked before the token count, not after. Counting is a call to
+    // Anthropic — free, but rate-limited per account — and `/quote` is unauthenticated,
+    // so doing it first would let anyone consume that limit against a store they were
+    // never going to be admitted to.
+    pruneExpiredQuotes();
+    if (pending.size >= maxPendingQuotes) {
+      throw new HttpError(503, "Too many unredeemed quotes outstanding; retry shortly");
+    }
+
     const inputTokens = await ai.countInputTokens(service, input);
     if (inputTokens > service.maxInputTokens) {
       // Rejected before any billable work happens.
@@ -172,11 +220,6 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
     }
 
     const quoteWei = await chain.quote(serviceId(slug), inputTokens);
-
-    pruneExpiredQuotes();
-    if (pending.size >= maxPendingQuotes) {
-      throw new HttpError(503, "Too many unredeemed quotes outstanding; retry shortly");
-    }
 
     const callId = hexlify(randomBytes(32));
 
@@ -186,6 +229,14 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
       input,
       inputTokens,
       maxOutputTokens: onChain.maxOutputTokens,
+      terms: {
+        provider: onChain.provider,
+        settler: onChain.settler,
+        baseFeeWei: onChain.baseFeeWei,
+        perInputTokenWei: onChain.perInputTokenWei,
+        perOutputTokenWei: onChain.perOutputTokenWei,
+        maxOutputTokens: onChain.maxOutputTokens,
+      },
       quoteWei,
       issuedAt: Date.now(),
     });
@@ -216,6 +267,14 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
 
     const quote = pending.get(callId);
     if (!quote) throw new HttpError(404, "Unknown or already-used callId");
+
+    // Expiry is enforced here as well as swept in `/quote`. Sweeping alone only runs
+    // when someone asks for a new quote, so on a quiet server an old quote would stay
+    // redeemable for as long as the process lived.
+    if (Date.now() - quote.issuedAt >= quoteTtlMs) {
+      pending.delete(callId);
+      throw new HttpError(410, "This quote has expired; take a fresh one");
+    }
 
     // Claimed before the first await. Everything below runs at most once per call id,
     // however many requests arrive together.
@@ -261,10 +320,22 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
         `Funded for ${onChainCall.quotedInputTokens} input tokens, quoted ${quote.inputTokens} — take a fresh quote`,
       );
     }
-    if (onChainCall.maxOutputTokens !== quote.maxOutputTokens) {
+    // The whole rate card, term by term, not just the ceiling and not just the total.
+    // The contract already refuses to fund a call whose terms moved after the buyer read
+    // them; this is the same check from the other side, and it is what stops the server
+    // spending tokens on a call priced by a formula it never quoted.
+    const changed = firstDifference(quote.terms, {
+      provider: onChainCall.provider,
+      settler: onChainCall.settler,
+      baseFeeWei: onChainCall.baseFeeWei,
+      perInputTokenWei: onChainCall.perInputTokenWei,
+      perOutputTokenWei: onChainCall.perOutputTokenWei,
+      maxOutputTokens: onChainCall.maxOutputTokens,
+    });
+    if (changed) {
       throw new HttpError(
         409,
-        `The output ceiling changed after this quote was issued (${quote.maxOutputTokens} to ${onChainCall.maxOutputTokens}) — take a fresh quote`,
+        `The ${changed} changed after this quote was issued — take a fresh quote`,
       );
     }
     // Nothing else can settle this call. Running it would mean doing the work and then

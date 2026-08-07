@@ -4,7 +4,6 @@ import {
   NonceManager,
   Wallet,
   type ContractTransactionResponse,
-  type TransactionReceipt,
 } from "ethers";
 
 /**
@@ -50,6 +49,8 @@ export interface OnChainCall {
   maxOutputTokens: number;
   expiresAt: bigint;
   settled: boolean;
+  /** Who settlement pays. Frozen with the rest of the terms. */
+  provider: string;
   /** The only account the contract will accept a settlement from. */
   settler: string;
   baseFeeWei: bigint;
@@ -187,6 +188,7 @@ export class TollgateChain implements Chain {
       maxOutputTokens: Number(c.maxOutputTokens),
       expiresAt: c.expiresAt,
       settled: c.settled,
+      provider: c.provider,
       settler: c.settler,
       baseFeeWei: c.baseFeeWei,
       perInputTokenWei: c.perInputTokenWei,
@@ -206,30 +208,70 @@ export class TollgateChain implements Chain {
    * A revert is not transient and will fail the same way each time; retrying it costs
    * three quick round trips and then surfaces the real error.
    */
-  async settleCall(callId: string, inputTokens: number, outputTokens: number): Promise<TransactionReceipt> {
+  async settleCall(callId: string, inputTokens: number, outputTokens: number): Promise<{ hash: string }> {
     return this.serialize(() =>
-      this.withRetry(`settleCall ${callId}`, async () => {
-        const tx = await this.contract.settleCall(callId, inputTokens, outputTokens);
-        return tx.wait();
-      }),
+      this.send(`settleCall ${callId}`, callId, () =>
+        this.contract.settleCall(callId, inputTokens, outputTokens),
+      ),
     );
   }
 
-  private async withRetry(
+  async failCall(callId: string, reason: string): Promise<{ hash: string }> {
+    return this.serialize(() =>
+      this.send(`failCall ${callId}`, callId, () =>
+        this.contract.failCall(callId, reason.slice(0, 200)),
+      ),
+    );
+  }
+
+  /**
+   * Has this call reached a terminal state, whatever this process managed to observe?
+   *
+   * Both `settleCall` and `failCall` set `settled`, so one question covers both.
+   */
+  private async isTerminal(callId: string): Promise<boolean> {
+    const c = await this.contract.calls(callId);
+    return c.buyer !== "0x0000000000000000000000000000000000000000" && c.settled;
+  }
+
+  /**
+   * Send a terminal transaction, retrying transient failures and reconciling ambiguous
+   * ones against the chain.
+   *
+   * Retrying a send whose outcome is unknown is the case that costs money. A transaction
+   * can mine while observing it still throws — a dropped socket, a provider rotating
+   * behind a load balancer, a node reorganizing the block it just reported. Retrying
+   * blind then submits a transaction that reverts with `AlreadySettled`, and after three
+   * attempts the caller is told the settlement failed for a call the buyer has already
+   * been charged for. So every failure asks the chain what actually happened before
+   * deciding it was a failure. A revert that really is a revert leaves the call
+   * unsettled, `isTerminal` stays false, and the retry proceeds as before.
+   */
+  private async send(
     label: string,
-    send: () => Promise<TransactionReceipt | null>,
+    callId: string,
+    broadcast: () => Promise<ContractTransactionResponse>,
     attempts = 3,
-  ): Promise<TransactionReceipt> {
+  ): Promise<{ hash: string }> {
     let lastError: unknown;
+    // Held across attempts: when a wait fails on a transaction that did mine, this is
+    // the only place its hash survives.
+    let broadcastHash = "";
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        const receipt = await send();
+        const tx = await broadcast();
+        broadcastHash = tx.hash;
+        const receipt = await tx.wait();
         if (!receipt) throw new Error(`${label} produced no receipt`);
-        return receipt;
+        return { hash: receipt.hash };
       } catch (error) {
         lastError = error;
-        // Whatever went wrong, the local nonce may have moved for a transaction that
-        // was never broadcast. Drop it and re-read from the chain before trying again.
+        if (await this.isTerminal(callId).catch(() => false)) {
+          console.warn(`${label} could not be observed but the call is settled on-chain; treating as done`);
+          return { hash: broadcastHash };
+        }
+        // Not settled, so nothing landed. The local nonce may have moved for a
+        // transaction that was never broadcast; drop it and re-read from the chain.
         this.nonces.reset();
         if (attempt < attempts) {
           console.warn(`${label} failed (attempt ${attempt}/${attempts}), retrying:`, error);
@@ -240,20 +282,6 @@ export class TollgateChain implements Chain {
     // Loud on the way out: at this point the model call has been paid for and not billed.
     console.error(`${label} did not land after ${attempts} attempts; the call is unsettled`, lastError);
     throw lastError;
-  }
-
-  async failCall(callId: string, reason: string): Promise<TransactionReceipt> {
-    return this.serialize(async () => {
-      try {
-        const tx = await this.contract.failCall(callId, reason.slice(0, 200));
-        const receipt = await tx.wait();
-        if (!receipt) throw new Error(`failCall ${callId} produced no receipt`);
-        return receipt;
-      } catch (error) {
-        this.nonces.reset();
-        throw error;
-      }
-    });
   }
 
   async balanceOf(account: string): Promise<bigint> {
