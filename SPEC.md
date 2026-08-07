@@ -66,7 +66,9 @@ divergence unlikely; it is the `min` that makes it harmless.
     |                          |-- quote(id, inputTokens) -->|
     |<-- callId, quoteWei -----|                            |
     |                                                       |
-    |-- openCall{value: quoteWei} ------------------------->| escrow held
+    |-- quote(), termsHash() ------------------------------>| priced independently
+    |-- openCall{value: quoteWei} + termsHash ------------->| escrow held, card
+    |                                                       |  pinned
     |                                                       |
     |-- POST /run + signature ->|                           |
     |                          |-- read call, check escrow ->|
@@ -86,6 +88,7 @@ divergence unlikely; it is the `min` that makes it harmless.
 | input tokens | `count_tokens`, before the call | free, and available before anything is spent; the provider carries any divergence |
 | output ceiling | on-chain rate card | the contract prices against it, so it must be the same number the API enforces |
 | price | `Tollgate.quote()` | if the server did its own arithmetic it could disagree with settlement |
+| the rate card behind the price | `Tollgate.termsHash()` | a total is not a formula; the buyer's escrow commits to the card, not just the number |
 | actual output | `usage.output_tokens` | the only authority on what was really used |
 
 ---
@@ -97,18 +100,31 @@ for usage. That is not hidden — it is bounded:
 
 - **The settler reports token counts, never a price.** Cost is recomputed on-chain from
   the rate card the provider published. A settler cannot invent a number.
-- **Settlement reverts if cost exceeds the escrow.** The quote is a hard ceiling on what
-  a buyer can be charged, enforced by the contract rather than by good behavior.
+- **Neither count may exceed what the quote was priced for**, and the total may not exceed
+  the escrow. The escrow is the quote itself — overfunding is credited straight back rather
+  than raising the ceiling — so "you cannot be charged past your quote" is literal.
+- **The escrow commits to the rate card, not just to the total.** `openCall` takes
+  `termsHash()` as the buyer read it and reverts if the live card has moved. Without this a
+  provider could swap in a formula producing the same total for that one input size while
+  making a short answer cost the full ceiling.
 - **`reclaimCall` returns the escrow after a timeout.** A settler that goes offline
   cannot strand a buyer's money.
-- **The `settler` address is separate from the `provider` address.** The key that signs
-  settlements is not the key that receives earnings, so a compromised server can
-  misreport usage but cannot move funds.
+- **The `settler` address is separate from the `provider` address** in this deployment, so
+  the key that signs settlements is not the key that receives earnings. Note the scope: the
+  contract permits a provider to register itself as its own settler. The separation is a
+  deployment choice, and a compromised server holding only the settler key can misreport
+  usage but cannot move funds.
 
 What remains is that a dishonest settler can over-report usage up to the escrow. Closing
 that gap needs an oracle, a TEE, or a proof of inference — all out of scope here, and all
 a much bigger project than this one. Being explicit about the boundary seemed better than
 implying a guarantee that isn't there.
+
+Two further boundaries, for completeness. The redemption signature binds the call id and the
+contract address but not the chain id, so it is not domain-separated across chains that
+happen to share a deployment address; EIP-712 with `chainId` is the right fix. And that
+signature is a bearer credential — whoever holds a valid one receives the output over HTTP,
+which is the buyer in practice because they hold the key that made it.
 
 ---
 
@@ -126,14 +142,14 @@ a service catalog, streaming-friendly HTTP surface.
 | Reference | Problem | Here |
 |---|---|---|
 | `Service` struct had no price field | a provider could not register a price at all — the marketplace's central claim | rate card on-chain: base fee, per-input-token, per-output-token, output ceiling |
-| `makePayment` accepted any `msg.value > 0` | 1 wei bought any service (verified against the original) | `openCall` reverts below the quote; regression test in `Tollgate.test.ts` |
+| `makePayment` accepted any `msg.value > 0` | 1 wei bought any service (verified against the original) | `openCall` reverts below the quote and records the quote rather than the transfer; regression tests in `Tollgate.test.ts` |
 | payment verified by matching a request id only, never the amount | same defect at the HTTP layer | `/run` checks the on-chain escrow against the issued quote before doing billable work |
 | `Math.random() > 0.5` faked payment success in dev mode | a coin-flip payment bypass | a fake *model* (`USE_FAKE_MODEL`), never a fake payment |
 | `registerService` was `onlyOwner` | no third party could ever list a service | anyone can register; `msg.sender` becomes the provider |
 | price = 3-tier step function on input **character** count | ignored output entirely, which is the dominant cost | priced per token, input and output separately |
 | price computed, displayed, then never enforced anywhere | advisory pricing | the quote is escrowed and settlement checks against it |
 | `deploy.sh` read gitignored `.env.testnet` and prompted for a pasted address | broken from a clean clone | `pnpm deploy:local` writes `deployment.json`; the server reads it |
-| three `.env` files across three packages | quickstart tax | one `.env.example`, all values optional locally |
+| three `.env` files across three packages | quickstart tax | one `.env.example` at the root, read at startup; every value optional locally except the model, which either spends money or does not |
 | 8 crypto-themed services, several stubs | padding | 3 services that work |
 
 ---
@@ -144,7 +160,7 @@ a service catalog, streaming-friendly HTTP surface.
 specific L1 because of where it was built. Nothing in the design needs one — it is plain
 EVM. `pnpm chain` gives a funded chain in about twelve seconds with no signup, no faucet
 and no card, which is the difference between a repo a stranger runs and one they don't.
-`RPC_URL` and `PRIVATE_KEY` point it anywhere else.
+`RPC_URL` and `SETTLER_PRIVATE_KEY` point it anywhere else.
 
 **Refunds accrue; they are not pushed.** `settleCall` credits a balance rather than
 transferring. For per-call amounts this is not a style preference: a push refund can cost
@@ -205,7 +221,11 @@ buyer already holds that key because they funded the call.
 **`/run` refuses to start too close to expiry.** `reclaimCall` opens at `expiresAt`. A
 call started a minute before that could have its escrow reclaimed while the model is
 still running, leaving the provider having paid for work it can no longer settle. Five
-minutes of required headroom removes the race instead of losing it politely.
+minutes of required headroom narrows that race; it does not close it. The check reads the
+server's wall clock once, before a generation that may take two minutes and a settlement
+that queues behind every other settlement on the same key, and `settleCall` itself takes
+no view on expiry — past the deadline, settling and reclaiming are whichever transaction
+mines first. Closing it means reserving the window on-chain, which is not built.
 
 **A call id is claimed synchronously before any `await`.** `/run` checked the pending
 quote, then did several awaits, then consumed it. Under concurrent requests for one call
@@ -224,22 +244,37 @@ with it, one.
 
 **Unredeemed quotes expire and are capped.** `/quote` is unauthenticated and each entry
 pins the caller's input string, so an unbounded map is an allocation an anonymous caller
-controls. Quotes now expire after fifteen minutes — comfortably inside the contract's
+controls. Quotes expire after fifteen minutes — comfortably inside the contract's
 one-hour `CALL_TIMEOUT`, so a quote can never outlive the call it priced — and the store
-refuses to grow past a fixed ceiling.
+refuses to grow past a fixed ceiling. Age is checked on redemption as well as swept on
+creation, because sweeping alone only runs when somebody asks for a new quote, and on an
+idle server an old quote stayed redeemable for the life of the process. The capacity check
+also runs *before* the token count, since counting is a rate-limited call to Anthropic and
+an anonymous caller should not be able to spend that limit against a full store.
+
+What the cap does not do is make the endpoint safe to expose. A thousand entries each
+holding up to a megabyte of input is not a small number, and nothing rate-limits requests.
+The server binds loopback unless `HOST` says otherwise for that reason.
 
 **In-memory quote store.** `/run` must land on the process that issued the `/quote`, so
 this does not survive horizontal scaling. It is called out in the code rather than
 papered over — the alternative is a Redis dependency that adds a service to the quickstart
 in exchange for a property a reference implementation does not need.
 
+The same store is why a purchase is not recoverable. `/run` consumes the quote before the
+model call, and the generated text is held only in the response, so a process death or a
+lost HTTP response between settlement and delivery leaves the buyer charged with nothing to
+re-fetch. Settlement reconciles against the chain before retrying, which removes the case
+where a mined transaction is reported as a failure, but the output itself is not durable.
+
 ---
 
 ## Layout
 
 ```
-packages/contracts   Tollgate.sol, 34 tests, deploy + registration script
+packages/contracts   Tollgate.sol, 48 tests, deploy + registration script
 packages/server      quote/run/settle HTTP surface, Anthropic client, chain client
+packages/web         browser walkthrough, 14 tests
 packages/demo        end-to-end walkthrough, prints what a call cost
 scripts/smoke.sh     full stack against a real chain; what CI runs
 ```
@@ -248,10 +283,15 @@ scripts/smoke.sh     full stack against a real chain; what CI runs
 
 | Suite | Covers | Needs |
 |---|---|---|
-| `packages/contracts` (39) | escrow, settlement arithmetic, frozen terms, fee split, refunds, expiry, withdrawal, access control | nothing |
-| `packages/server` (27) | quoting, escrow verification, redemption signatures, concurrent redemption, quote expiry and capacity, expiry headroom, single-use call ids, failure refunds, input clamping | nothing |
+| `packages/contracts` (48) | escrow, the terms-hash commitment, overfunding, settlement arithmetic, per-count bounds, frozen terms, fee split, refunds, expiry, withdrawal, access control | nothing |
+| `packages/server` (39) | quoting, escrow verification, rate-card comparison, redemption signatures, concurrent redemption, quote expiry and capacity, expiry headroom, single-use call ids, failure refunds, input clamping | nothing |
+| `packages/web` (14) | the money formatting the page renders settlement with | nothing |
 | `live-anthropic.test.ts` (4) | count-before matches count-after; `max_tokens` is enforced | `RUN_LIVE_TESTS=1` + key |
-| `scripts/smoke.sh` | the whole stack against a real chain | nothing |
+| `scripts/smoke.sh` | the whole stack against a real chain, including the browser client's own modules | nothing |
 
-The default suite is offline and free. The two live tests exist because the entire
-pricing model rests on those two API properties, and asserting them beats assuming them.
+The default suite is offline and free. The four live tests exist because the entire
+pricing model rests on those API properties, and asserting them beats assuming them.
+
+Not covered: `TollgateChain` itself. Every server test substitutes an in-memory chain, so
+the retry, nonce-reset and receipt-reconciliation paths are exercised only by `smoke.sh`
+against a local node, and not in their failure modes.

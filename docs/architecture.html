@@ -122,7 +122,7 @@
     <div class="box">
       <div class="btop"><div class="num">2</div><div class="bname">Terminal walkthrough</div></div>
       <div class="bpath">packages/demo/src/index.ts</div>
-      <div class="bdesc">The same six steps without a browser: catalogue, quote, escrow, run, settlement, balances.</div>
+      <div class="bdesc">The same six steps without a browser: catalog, quote, escrow, run, settlement, balances.</div>
     </div>
   </div>
 </div>
@@ -142,23 +142,23 @@
   <div class="row r4">
     <div class="box">
       <div class="btop"><div class="num">3</div><div class="bname">HTTP surface</div></div>
-      <div class="bpath">server/src/app.ts</div>
+      <div class="bpath">packages/server/src/app.ts</div>
       <div class="api">GET&nbsp;/health<br>GET&nbsp;/services<br>POST&nbsp;/quote<br>POST&nbsp;/run</div>
     </div>
     <div class="box">
-      <div class="btop"><div class="num">4</div><div class="bname">Catalogue</div></div>
-      <div class="bpath">server/src/catalogue.ts</div>
+      <div class="btop"><div class="num">4</div><div class="bname">Catalog</div></div>
+      <div class="bpath">packages/server/src/catalog.ts</div>
       <div class="bdesc">Prompts, models and input limits. <b>No prices, no ceiling</b> — those are read from the chain.</div>
     </div>
     <div class="box">
       <div class="btop"><div class="num">5</div><div class="bname">Model client</div></div>
-      <div class="bpath">server/src/ai.ts</div>
+      <div class="bpath">packages/server/src/ai.ts</div>
       <div class="bdesc">Counts, then calls. Both built from one request shape so the two cannot drift.</div>
     </div>
     <div class="box">
       <div class="btop"><div class="num">6</div><div class="bname">Chain client</div></div>
-      <div class="bpath">server/src/chain.ts</div>
-      <div class="bdesc">Reads services and calls; submits settlement. Transactions are serialised and retried.</div>
+      <div class="bpath">packages/server/src/chain.ts</div>
+      <div class="bdesc">Reads services and calls; submits settlement. Transactions are serialized, retried, and reconciled against the chain.</div>
     </div>
   </div>
 </div>
@@ -176,7 +176,7 @@
       <div class="keytag none">NOT PART OF THIS REPO</div>
     </div>
     <div class="box">
-      <div class="btop"><div class="num">7</div><div class="bname">Where the two numbers come from</div></div>
+      <div class="btop"><div class="bname">Where the two numbers come from</div></div>
       <div class="bdesc">
         <span class="m">count_tokens</span> gives the input size before anything is spent — free, and
         documented as an estimate. <span class="m">max_tokens</span> is the absolute maximum on
@@ -191,9 +191,9 @@
       <div class="keytag none">ANY EVM CHAIN</div>
     </div>
     <div class="box">
-      <div class="btop"><div class="num">8</div><div class="bname">The only place a price is computed</div></div>
+      <div class="btop"><div class="num">7</div><div class="bname">The only authoritative price</div></div>
       <div class="bpath">packages/contracts/contracts/Tollgate.sol</div>
-      <div class="api">quote() · openCall() · settleCall() · failCall()<br>reclaimCall() · withdraw() · withdrawTo()</div>
+      <div class="api">quote() · termsHash() · openCall() · settleCall()<br>failCall() · reclaimCall() · withdraw() · withdrawTo()</div>
     </div>
   </div>
 </div>
@@ -219,7 +219,8 @@
     signature are the two things that have to come from the buyer, and both are made on their side.
   </div>
   <div class="fn fn-s">
-    <b>The settler key cannot move money.</b> It may report usage on a call and nothing else.
-    Earnings go to the provider address, which is a different account.
+    <b>The settler key does not hold the earnings.</b> It reports usage; the money accrues to the
+    provider address, a separate account here. The contract permits a provider to register itself
+    as its own settler, so this separation is how the demo deploys rather than a rule it enforces.
   </div>
 </div>
