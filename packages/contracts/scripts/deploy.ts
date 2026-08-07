@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
- * Deploy Tollgate and list the catalogue on it.
+ * Deploy Tollgate and list the catalog on it.
  *
  * The rate cards live here rather than in the server, because the chain is the
  * authoritative source for anything that affects billing — the server reads prices

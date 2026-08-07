@@ -139,7 +139,7 @@ export class TollgateChain implements Chain {
    *
    * Recovering means calling `reset()`, and that is only safe when nothing else from
    * this key is in flight — hence the queue. Settlement is a short transaction on a
-   * single key; serialising it costs little and removes a whole class of stuck state.
+   * single key; serializing it costs little and removes a whole class of stuck state.
    */
   private serialize<T>(job: () => Promise<T>): Promise<T> {
     const started = this.queue.then(job, job);

@@ -1,7 +1,7 @@
 import { id as keccakId } from "ethers";
 
 /**
- * The service catalogue.
+ * The service catalog.
  *
  * Three services, all of which genuinely work. They are chosen to make the metering
  * visible rather than to pad a list: their output/input ratios differ by roughly an
@@ -61,7 +61,7 @@ export const SERVICES: ServiceDefinition[] = [
     description: "Walk through what a snippet does and flag anything surprising. Output scales with the code.",
     model: "claude-opus-5",
     systemPrompt: [
-      "Explain what the user's code does, then note any bug, edge case, or surprising behaviour you see.",
+      "Explain what the user's code does, then note any bug, edge case, or surprising behavior you see.",
       "Be concrete and skip pleasantries. If the code is fine, say so plainly rather than inventing concerns.",
       OUTPUT_HYGIENE,
     ].join(" "),

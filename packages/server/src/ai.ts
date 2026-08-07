@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { ServiceDefinition } from "./catalogue.js";
+import type { ServiceDefinition } from "./catalog.js";
 
 export interface RunResult {
   text: string;
@@ -88,7 +88,7 @@ export class AnthropicClient implements AiClient {
      * not treated as infallible: settlement bills `min(observed, quoted)`, which leaves
      * the buyer's ceiling exactly what they agreed to and puts any divergence on the
      * provider who published the rate card. `test/live-anthropic.test.ts` asserts the
-     * two agree for the payloads this catalogue actually sends.
+     * two agree for the payloads this catalog actually sends.
      */
     const res = await this.client.messages.countTokens(buildRequest(service, input));
     return res.input_tokens;

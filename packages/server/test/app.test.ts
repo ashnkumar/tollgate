@@ -7,7 +7,7 @@ import { getAddress, Wallet } from "ethers";
 import type { Express } from "express";
 import { createApp, redemptionMessage } from "../src/app.js";
 import { FakeAiClient, ModelRefusedError, type AiClient } from "../src/ai.js";
-import { serviceId, type ServiceDefinition } from "../src/catalogue.js";
+import { serviceId, type ServiceDefinition } from "../src/catalog.js";
 import { FakeChain } from "./support/fake-chain.js";
 
 describe("payment guards", () => {
@@ -298,7 +298,7 @@ describe("payment guards", () => {
     });
 
     it("refuses to mint unbounded quotes", async () => {
-      // Same behaviour as the production ceiling, exercised at a size that keeps the
+      // Same behavior as the production ceiling, exercised at a size that keeps the
       // test fast rather than minting a thousand quotes through a deferred fake chain.
       const capped = createApp({
         ai: new FakeAiClient(),
@@ -488,7 +488,7 @@ describe("payment guards", () => {
     });
   });
 
-  describe("catalogue", () => {
+  describe("catalog", () => {
     it("reports registration state and rate cards", async () => {
       const res = await request(app).get("/services");
       expect(res.status).toBe(200);
@@ -517,7 +517,7 @@ describe("payment guards", () => {
       webRoot = mkdtempSync(join(tmpdir(), "tollgate-web-"));
       writeFileSync(join(webRoot, "index.html"), "<!doctype html><title>t</title>");
       // Deliberately named after an endpoint.
-      writeFileSync(join(webRoot, "services"), "not the catalogue");
+      writeFileSync(join(webRoot, "services"), "not the catalog");
     });
 
     afterAll(() => {

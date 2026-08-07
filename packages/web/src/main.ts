@@ -137,7 +137,7 @@ async function renderChainStrip(): Promise<void> {
   ]);
 }
 
-function renderCatalogue(): void {
+function renderCatalog(): void {
   const container = el("services");
   container.replaceChildren();
 
@@ -184,7 +184,7 @@ function selectService(service: ListedService): void {
   state.selected = service;
   state.quote = undefined;
   clearFailure();
-  renderCatalogue();
+  renderCatalog();
 
   show("panel-input");
   show("panel-quote", false);
@@ -445,7 +445,7 @@ async function boot(): Promise<void> {
     running: false,
   };
 
-  renderCatalogue();
+  renderCatalog();
   await renderChainStrip();
 
   el("quote-btn").addEventListener("click", () => void getQuote());

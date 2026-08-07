@@ -1,6 +1,6 @@
 import { Wallet } from "ethers";
 import type { Chain, OnChainCall, OnChainService } from "../../src/chain.js";
-import { serviceId } from "../../src/catalogue.js";
+import { serviceId } from "../../src/catalog.js";
 
 const ZERO = "0x0000000000000000000000000000000000000000";
 
@@ -8,7 +8,7 @@ const ZERO = "0x0000000000000000000000000000000000000000";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
- * In-memory stand-in for the contract. Mirrors the parts of Tollgate's behaviour the
+ * In-memory stand-in for the contract. Mirrors the parts of Tollgate's behavior the
  * server relies on — notably that cost is recomputed from the stored rate card, so a
  * test cannot accidentally assert against a price the server invented.
  *

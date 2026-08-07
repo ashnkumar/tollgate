@@ -125,7 +125,7 @@ export async function connect(rpcUrl: string, contractAddress: string): Promise<
 
     async withdraw() {
       // `withdraw()` pays out the whole balance and zeroes it, so read the amount before
-      // sending. Diffing the account balance afterwards would also pick up gas.
+      // sending. Diffing the account balance afterward would also pick up gas.
       const amountWei = await tollgate.balances(wallet.address);
       const tx = await tollgate.withdraw();
       await tx.wait();

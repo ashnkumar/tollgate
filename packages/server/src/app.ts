@@ -1,7 +1,7 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { randomBytes } from "node:crypto";
 import { getAddress, hexlify, verifyMessage } from "ethers";
-import { SERVICES, findService, serviceId, type ServiceDefinition } from "./catalogue.js";
+import { SERVICES, findService, serviceId, type ServiceDefinition } from "./catalog.js";
 import type { AiClient } from "./ai.js";
 import { ModelRefusedError } from "./ai.js";
 import type { Chain } from "./chain.js";
@@ -116,7 +116,7 @@ export function createApp({ ai, chain, contractAddress, limits, webRoot }: AppDe
     res.json({ ok: true, settler: chain.settlerAddress, contract: getAddress(contractAddress) });
   });
 
-  /** The catalogue, joined with each service's on-chain rate card. */
+  /** The catalog, joined with each service's on-chain rate card. */
   app.get("/services", async (_req, res) => {
     const listed = await Promise.all(
       SERVICES.map(async (service) => {

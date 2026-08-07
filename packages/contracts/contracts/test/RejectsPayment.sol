@@ -17,7 +17,7 @@ interface ITollgate {
 contract RejectsPayment {
     ITollgate private immutable tollgate;
 
-    /// @dev Funded at construction, because it cannot be sent anything afterwards.
+    /// @dev Funded at construction, because it cannot be sent anything afterward.
     constructor(ITollgate tollgate_) payable {
         tollgate = tollgate_;
     }

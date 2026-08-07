@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { AnthropicClient } from "../src/ai.js";
-import { findService } from "../src/catalogue.js";
+import { findService } from "../src/catalog.js";
 
 /**
  * Exercises the real Anthropic API.

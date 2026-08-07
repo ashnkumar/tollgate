@@ -54,7 +54,7 @@ contract Tollgate {
     ///      buyer's funds sit until `CALL_TIMEOUT` and the provider earns nothing.
     ///
     ///      Snapshotting costs three extra storage slots per call and makes a funded call
-    ///      immune to anything the provider does afterwards.
+    ///      immune to anything the provider does afterward.
     struct Call {
         bytes32 serviceId;
         address buyer;

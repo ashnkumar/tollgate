@@ -120,7 +120,7 @@ async function main() {
   const tollgate = new Contract(deployment.address, ABI, new NonceManager(buyer));
 
   // ── 1. what is on offer ────────────────────────────────────────────────
-  heading("1. Catalogue");
+  heading("1. Catalog");
   const { services } = await api<{
     services: Array<{
       slug: string;
