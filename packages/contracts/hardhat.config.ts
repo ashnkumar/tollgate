@@ -22,8 +22,11 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {},
+    // Follows RPC_URL so a chain started on a non-default port is still reachable.
+    // `scripts/smoke.sh` tells you to move RPC_PORT when 8545 is taken, which only
+    // works if the deploy step moves with it. Same address as before when unset.
     localhost: {
-      url: "http://127.0.0.1:8545",
+      url: RPC_URL,
     },
     custom: {
       url: RPC_URL,

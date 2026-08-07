@@ -98,7 +98,7 @@ for usage. That is not hidden — it is bounded:
 - **The settler reports token counts, never a price.** Cost is recomputed on-chain from
   the rate card the provider published. A settler cannot invent a number.
 - **Settlement reverts if cost exceeds the escrow.** The quote is a hard ceiling on what
-  a buyer can be charged, enforced by the contract rather than by good behaviour.
+  a buyer can be charged, enforced by the contract rather than by good behavior.
 - **`reclaimCall` returns the escrow after a timeout.** A settler that goes offline
   cannot strand a buyer's money.
 - **The `settler` address is separate from the `provider` address.** The key that signs
@@ -119,7 +119,7 @@ marketplace of AI services paid for per call, settled on-chain, no subscription 
 account. That idea is intact here. Almost none of the execution is.
 
 **The good idea, kept:** per-call payment, no account, provider earnings accruing on-chain,
-a service catalogue, streaming-friendly HTTP surface.
+a service catalog, streaming-friendly HTTP surface.
 
 **What had to change:**
 
@@ -160,7 +160,7 @@ makes the provider absorb its own estimation error, which is the right way round
 provider published the rate card.
 
 **The output ceiling lives on-chain only.** It is tempting to keep a copy in the service
-catalogue next to the prompt. But that number does two jobs — the contract prices against
+catalog next to the prompt. But that number does two jobs — the contract prices against
 it and the API enforces it — and if the two copies drifted, the quote would silently stop
 being an upper bound. So there is one copy, on-chain, and the server reads it.
 
@@ -169,6 +169,14 @@ being an upper bound. So there is one copy, on-chain, and the server reads it.
 can pay for a full budget and receive a truncated answer. Disabling it makes the budget
 the buyer escrows the budget they get. The documented cost is that internal tags can
 occasionally leak into output; the system prompts carry the standard mitigation.
+
+That is also what confines the catalog to the models it lists. Claude Opus 5 accepts
+`thinking: {type: "disabled"}` only at `high` effort or below and returns a 400 at `xhigh`
+or `max`; Claude Fable 5, Claude Mythos 5 and Claude Mythos Preview reject it outright. On
+a model where thinking cannot be turned off, `max_tokens` still bounds the buyer's cost
+exactly and stops bounding the answer at all — the escrow is safe and the guarantee that it
+buys a whole response is gone. The two are not the same promise, and only one of them
+survives everywhere.
 
 **No `docker compose`.** It was in the original plan and was dropped on contact with
 reality. The only genuinely external dependency is the Anthropic API, which a container
@@ -184,7 +192,7 @@ unreportable, changing the settler locked out the machine that did the work. The
 was never overcharged, but their money sat until timeout and the provider earned nothing,
 and an honest price change would brick every call in flight. `openCall` now freezes the
 provider, settler, rates and ceiling into the call. Three extra storage slots; funded
-calls become immune to anything the provider does afterwards.
+calls become immune to anything the provider does afterward.
 
 **Redeeming output requires a signature, not just the call id.** The call id is minted by
 the server and returned over HTTP, so it can land in a proxy log or a shared client. If
