@@ -8,34 +8,22 @@ Auth-and-capture for AI API calls, settled on-chain.
 
 ![A terminal run of one call: the price is computed and confirmed against the contract before anything runs, 0.003254 ETH is escrowed, the call produces 181 of its 400 allowed output tokens, and 0.001095 ETH comes back.](docs/demo.gif)
 
-One real call against the Anthropic API. The price is worked out and agreed before the model
-starts, because it is arithmetic — a counted input and a capped answer, against rates the
-provider published. What comes back at the end is whatever the call did not use: 33.6% here,
-and a different figure on every run.
+One real call against the Anthropic API, start to finish. The price is agreed and escrowed
+before the model starts, the call produces 181 of the 400 output tokens it was allowed, and
+33.6% of the escrow comes back — a different figure on every run.
 
-## The problem
+You want to sell someone a single call to a language model, and you cannot tell them what it
+costs until it is over. You can count what they handed you, but the length of the answer is the
+model's decision, made while it writes, and on the same service it might be forty words or four
+hundred. Charge a flat fee and the short answers subsidize the long ones. Ask the buyer to trust
+your estimate instead and you are asking them to trust a meter only you can read.
 
-You want to sell someone a single call to a language model. They hand you a document, you run
-it, you charge them. The trouble is you cannot say what it costs until it is over. You can
-measure what they gave you, but the length of the answer is the model's decision, made while
-it writes, and on the same service it might be forty words or four hundred.
-
-Every way out of that costs somebody. Charge a flat price and the short answers subsidize the
-long ones, so most buyers overpay and the tail still loses you money. Bill afterward at cost
-and you have handed the buyer an invoice for a number they never agreed to. Ask them to trust
-your estimate and you have asked them to trust a number you produced, on a meter only you can
-read.
-
-**Tollgate takes the trade cards took decades ago: agree a ceiling before the work starts, then
-charge what the work actually cost.** A gas pump authorizes an amount against your card before
-it will dispense a drop, you fill up, and it captures what you pumped. The ceiling is not a
-price — it is what lets the pump start without knowing where it will stop.
-
-You pay for that with two payments instead of one, money held that was never going to be spent,
-and a refund the buyer has to collect. What you get is a ceiling the buyer worked out themselves
-beforehand, and a final bill neither side has to be trusted for.
-
-The rest of this page is how that works and how to run it.
+**Tollgate is a working marketplace for that one transaction.** A provider publishes per-token
+rates on-chain, the buyer computes the worst-case price for their own input and escrows it, the
+call runs, and the contract then bills what the call actually consumed and sends the remainder
+back. The repository is all of it: the contract that holds the rate cards and the escrow, a server
+that makes the call and reports what it used, and browser and terminal walkthroughs that drive
+one purchase from quote to refund.
 
 ## Quickstart
 
@@ -62,7 +50,7 @@ a `summarize` call costs about half a cent; `explain-code`, which nearly fills i
 costs about three. Prefer a terminal? `./scripts/smoke.sh` does the same round trip
 without a browser and asserts the result — it is what CI runs.
 
-## What you get
+## What's in this repo: Tollgate
 
 | | Buying an AI call the usual way | With Tollgate |
 |---|---|---|
@@ -72,14 +60,18 @@ without a browser and asserts the result — it is what CI runs.
 | **Mid-call price changes** | Whatever the seller's current rate card says | The call carries its own frozen copy of the terms it was funded under |
 | **The seller vanishes** | You chase a refund | The whole escrow comes back after a timeout, and nobody can stop it |
 
-A flat price per call is the right answer more often than this table makes it sound. It needs
-no settlement transaction, no refund path and no second signature, and when your calls are
-uniform in size the variance it hides is variance nobody was going to notice. It stops being
-right when output length is the dominant cost and it moves by an order of magnitude between
-buyers, which is where a single number has to be wrong for almost everybody. The price of
-going the other way is real: the buyer's capital sits in escrow they were never going to
-spend, gas is paid twice, and a crash between the model call and settlement loses the provider
-output it has already been billed for.
+**Tollgate takes the trade that credit cards took decades ago: agree a ceiling before the work
+starts, then charge what the work actually cost.** A gas pump authorizes an amount against your
+card before it will dispense a drop, you fill up, and it captures what you pumped. The ceiling is
+not a price — it is what lets the pump start without knowing where it will stop.
+
+A flat price per call is the right answer more often than that table makes it sound: it needs no
+settlement transaction, no refund path and no second signature, and when calls are uniform in size
+the variance it hides is variance nobody was going to notice. It stops being right when output
+length is the dominant cost and it moves by an order of magnitude between buyers, which is where a
+single number has to be wrong for almost everybody. Going the other way is not free either — the
+buyer's capital sits in escrow they were never going to spend, gas is paid twice, and a crash
+between the model call and settlement loses the provider output it has already been billed for.
 
 ## How it works
 
@@ -111,7 +103,7 @@ output it has already been billed for.
 | **6** | Chain client | `packages/server/src/chain.ts` | Holds the settler key. Serializes and retries settlement |
 | **7** | Contract | `packages/contracts/contracts/Tollgate.sol` | Rate cards, escrow, settlement, withdrawals. The only place a price is computed |
 
-Start with `Tollgate.sol`. It is the whole idea and it is 391 lines.
+Start with `Tollgate.sol`.
 
 ## The settler never names a price
 
