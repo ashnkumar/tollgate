@@ -41,9 +41,9 @@ is what CI runs.
 
 ## The problem
 
-You cannot tell a buyer what one call to a language model costs until it is over, because the
+You can't tell a buyer what one call to a language model costs until it's over, because the
 length of the answer is the model's decision, made while it writes. Charge a flat fee and short
-answers subsidize long ones; ask the buyer to trust your estimate and you are asking them to trust
+answers subsidize long ones; ask the buyer to trust your estimate and you're asking them to trust
 a meter only you can read. **Tollgate does what credit cards do: agree a ceiling before the work
 starts, then charge what the work actually cost.** A provider publishes per-token rates on-chain,
 the buyer escrows the worst case for their own input, and the contract bills what the call consumed
@@ -63,7 +63,7 @@ and returns the rest.
   instead would let a provider strand an in-flight call's escrow by editing the service mid-flight.
 - **Refunds and earnings accrue to a balance you withdraw.** At per-call amounts a pushed refund can
   cost more gas than it returns. `withdrawTo()` names the recipient, so a balance owed to an account
-  with a non-payable fallback is not stranded.
+  with a non-payable fallback isn't stranded.
 
 ### Architecture
 
@@ -75,7 +75,7 @@ and returns the rest.
 | **2** | Terminal walkthrough | `packages/demo/src/index.ts` | The same six steps without a browser |
 | **3** | HTTP surface | `packages/server/src/app.ts` | `/quote` and `/run`, and every check that runs before a token is spent |
 | **4** | Catalog | `packages/server/src/catalog.ts` | Prompts, models, input limits. Deliberately holds no prices and no ceiling |
-| **5** | Model client | `packages/server/src/ai.ts` | Counts, then calls — both built from one request shape so they cannot drift |
+| **5** | Model client | `packages/server/src/ai.ts` | Counts, then calls — both built from one request shape so they can't drift |
 | **6** | Chain client | `packages/server/src/chain.ts` | Holds the settler key. Serializes settlement, and reconciles against the chain before retrying |
 | **7** | Contract | `packages/contracts/contracts/Tollgate.sol` | Rate cards, escrow, settlement, withdrawals. The only authoritative price |
 
@@ -103,7 +103,7 @@ Three properties of the Anthropic API carry the design, so each is asserted rath
 
 | Property | The vendor's wording | Why it matters here |
 |---|---|---|
-| [`max_tokens`](https://platform.claude.com/docs/en/api/messages) | "the absolute maximum number of tokens to generate" | Without a hard ceiling the worst case is a guess, and there is nothing to escrow |
+| [`max_tokens`](https://platform.claude.com/docs/en/api/messages) | "the absolute maximum number of tokens to generate" | Without a hard ceiling the worst case is a guess, and there's nothing to escrow |
 | [`count_tokens`](https://platform.claude.com/docs/en/build-with-claude/token-counting) | "The token count is an estimate" — and it may include system-added tokens you "are not billed for" | The quote can exceed the eventual bill, so settlement charges `min(observed, quoted)` and the provider absorbs its own estimate |
 | [thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) | reasoning tokens "count toward `max_tokens` alongside the response text" | With thinking on, a buyer can pay for a full budget and receive a truncated answer, so the catalog disables it |
 
@@ -114,7 +114,7 @@ for LLM token generation. If you want per-request machine payments over HTTP tod
 narrow thing Tollgate does differently is publish the *formula* rather than only the cap: under
 `upto` the resource server "MUST set the `amount` field ... to the desired settlement amount", where
 here the unit prices are on-chain and the bill is arithmetic the buyer can repeat. x402 also
-specifies batch settlement to amortize gas, which this does not.
+specifies batch settlement to amortize gas, which this doesn't.
 
 `SPEC.md` has the rest: the flow, the trust model, and the decisions considered and dropped.
 
@@ -159,23 +159,23 @@ and `max_tokens` is a ceiling rather than a hint.
 - **A call can be charged for and the output still lost.** The result is held in process memory
   until settlement lands. If the process dies in that window, or the HTTP response never arrives,
   the buyer has paid on-chain with nothing to re-fetch — the call id is spent.
-- **Thinking has to be off, which is not what Anthropic recommends.** Reasoning tokens share the
+- **Thinking has to be off, which isn't what Anthropic recommends.** Reasoning tokens share the
   `max_tokens` budget, so the escrow only buys a whole answer when thinking is disabled. The
   vendor's [primary mitigation](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5)
   is "to keep thinking enabled and control token cost with lower effort levels instead" — no help
   here, because effort is a behavioral signal and the ceiling has to be a bound. That means Claude
   Opus 5 at `high` effort or below (`xhigh` and `max` return a 400), and rules out Claude Fable 5.
 - **It costs more than a flat price.** A flat fee needs no settlement transaction, no refund path
-  and no second signature, and it is the right answer whenever calls are uniform in size. Here the
+  and no second signature, and it's the right answer whenever calls are uniform in size. Here the
   buyer's capital sits in escrow they were never going to spend, and one purchase becomes an escrow,
   a settlement and a withdrawal on each side.
 
-`SPEC.md` has the full list: **the trust model** covers what a compromised settler can and cannot
+`SPEC.md` has the full list: **the trust model** covers what a compromised settler can and can't
 do, the reclaim after a timeout, and the redemption signature not binding the chain id; **decisions
 worth recording** covers the in-memory quote store, the capped and unauthenticated `/quote`, and the
 expiry headroom, which narrows the settle-versus-reclaim race rather than closing it.
 
-Five things are in neither. **The contract has not been audited.** The browser walkthrough holds a
+Five things are in neither. **The contract hasn't been audited.** The browser walkthrough holds a
 published development key. The page's price check verifies the price *given* an input count the
 server supplied, not the count itself. Provider and settler being separate accounts is a deployment
 choice. And prices are in the chain's native token, with no oracle.
