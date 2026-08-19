@@ -13,7 +13,7 @@ runs. The call uses 181 of its 400 allowed output tokens, settles at 0.002159 ET
 remaining 0.001095 ETH back to the buyer. The output length and refund change from run to run; the
 maximum charge is fixed before generation.
 
-*See the **[technical post](https://example.com/tollgate-technical-post)** for more details.*
+*See the **[technical post](https://voxellabs.ai/projects/tollgate)** for more details.*
 
 ## Quickstart
 
